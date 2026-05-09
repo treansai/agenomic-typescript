@@ -1,4 +1,4 @@
-export { AgentLockClient } from "./client";
+export { AgenomicClient } from "./client";
 export { exportTracesToJsonl } from "./exporters/jsonl";
 export { sendTraceToHttp } from "./exporters/http";
 export { instrumentOpenAI } from "./integrations/openai";
@@ -60,7 +60,7 @@ export {
   stableStringify,
 } from "./utils";
 export type {
-  AgentLockClientOptions,
+  AgenomicClientOptions,
   AgentRun,
   CompleteTraceInput,
   CreateTraceInput,

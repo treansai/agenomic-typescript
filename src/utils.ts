@@ -2,9 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { ErrorInfo } from "./models";
 
-export const TRACE_SPEC_VERSION = "agentlock.trace.v1";
+export const TRACE_SPEC_VERSION = "agenomic.trace.v1";
 export const SDK_METADATA = {
-  name: "agentlock-typescript",
+  name: "agenomic-typescript",
   language: "typescript",
   runtime: "node",
 } as const;

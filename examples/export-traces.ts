@@ -1,7 +1,7 @@
-import { AgentLockClient } from "../src/index";
+import { AgenomicClient } from "../src/index";
 
 async function main(): Promise<void> {
-  const client = new AgentLockClient();
+  const client = new AgenomicClient();
   const trace = client.createTrace({
     agentId: "export-agent",
     input: {
@@ -25,7 +25,7 @@ async function main(): Promise<void> {
     output: { stored: true },
   });
 
-  await client.exportJsonl("./traces/agentlock.jsonl", [trace.build()]);
+  await client.exportJsonl("./traces/agenomic.jsonl", [trace.build()]);
 }
 
 void main();

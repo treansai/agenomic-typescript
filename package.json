@@ -1,9 +1,9 @@
 {
-  "name": "agentlock-typescript",
+  "name": "agenomic-typescript",
   "version": "0.1.0",
-  "description": "Lightweight TypeScript SDK for emitting AgentLock-compatible traces from Node.js and TypeScript agents.",
+  "description": "Lightweight TypeScript SDK for emitting Agenomic-compatible traces from Node.js and TypeScript agents.",
   "license": "MIT",
-  "author": "AgentLock",
+  "author": "Agenomic",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -32,7 +32,7 @@
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
-    "agentlock",
+    "agenomic",
     "ai",
     "tracing",
     "typescript",

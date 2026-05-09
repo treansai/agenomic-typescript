@@ -1,19 +1,19 @@
 import { exportTracesToJsonl } from "./exporters/jsonl";
 import { sendTraceToHttp } from "./exporters/http";
 import type {
-  AgentLockClientOptions,
+  AgenomicClientOptions,
   CreateTraceInput,
   TraceEnvelope,
 } from "./models";
 import { TraceEnvelopeSchema } from "./schemas";
 import { TraceBuilder } from "./tracing";
 
-export class AgentLockClient {
+export class AgenomicClient {
   readonly apiKey?: string;
   readonly endpoint?: string;
   readonly headers?: Record<string, string>;
 
-  constructor(options: AgentLockClientOptions = {}) {
+  constructor(options: AgenomicClientOptions = {}) {
     this.apiKey = options.apiKey;
     this.endpoint = options.endpoint;
     this.headers = options.headers;
