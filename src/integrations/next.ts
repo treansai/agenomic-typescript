@@ -1,9 +1,9 @@
-import type { AgentLockClient } from "../client";
+import type { AgenomicClient } from "../client";
 import type { CreateTraceInput, RedactionInput, RedactionMode } from "../models";
 import { TraceBuilder, withTraceContext } from "../tracing";
 
 export interface NextRouteTraceOptions<TContext = unknown> {
-  client: AgentLockClient;
+  client: AgenomicClient;
   agentId: string;
   release?: string;
   redact?: RedactionInput;

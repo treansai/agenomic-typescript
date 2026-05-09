@@ -1,6 +1,6 @@
-# AgentLock TypeScript SDK
+# Agenomic TypeScript SDK
 
-Lightweight TypeScript SDK for instrumenting Node.js and TypeScript AI agents and emitting AgentLock-compatible traces.
+Lightweight TypeScript SDK for instrumenting Node.js and TypeScript AI agents and emitting Agenomic-compatible traces.
 
 ## Features
 
@@ -16,7 +16,7 @@ Lightweight TypeScript SDK for instrumenting Node.js and TypeScript AI agents an
 ## Installation
 
 ```bash
-pnpm add agentlock-typescript
+pnpm add agenomic-typescript
 ```
 
 Node.js `18+` is required.
@@ -24,9 +24,9 @@ Node.js `18+` is required.
 ## Basic Usage
 
 ```ts
-import { AgentLockClient, traceAgentRun } from "agentlock-typescript";
+import { AgenomicClient, traceAgentRun } from "agenomic-typescript";
 
-const client = new AgentLockClient();
+const client = new AgenomicClient();
 
 const runAgent = traceAgentRun(
   {
@@ -63,9 +63,9 @@ If no `endpoint` is configured, the SDK operates in local-only mode and will not
 ## Manual Trace Creation
 
 ```ts
-import { AgentLockClient } from "agentlock-typescript";
+import { AgenomicClient } from "agenomic-typescript";
 
-const client = new AgentLockClient();
+const client = new AgenomicClient();
 
 const trace = client.createTrace({
   agentId: "manual-agent",
@@ -90,11 +90,11 @@ const envelope = trace.build();
 ## Node.js HTTP Ingestion
 
 ```ts
-import { AgentLockClient } from "agentlock-typescript";
+import { AgenomicClient } from "agenomic-typescript";
 
-const client = new AgentLockClient({
-  apiKey: process.env.AGENTLOCK_API_KEY,
-  endpoint: "https://api.agentlock.example/v1/traces",
+const client = new AgenomicClient({
+  apiKey: process.env.AGENOMIC_API_KEY,
+  endpoint: "https://api.agenomic.example/v1/traces",
 });
 ```
 
@@ -105,9 +105,9 @@ const client = new AgentLockClient({
 The SDK does not depend on `next`, so it can live in shared packages and still typecheck in non-Next environments.
 
 ```ts
-import { AgentLockClient, withTracedRoute } from "agentlock-typescript";
+import { AgenomicClient, withTracedRoute } from "agenomic-typescript";
 
-const client = new AgentLockClient();
+const client = new AgenomicClient();
 
 export const POST = withTracedRoute(
   {
@@ -141,9 +141,9 @@ export const POST = withTracedRoute(
 ## JSONL Export
 
 ```ts
-import { AgentLockClient } from "agentlock-typescript";
+import { AgenomicClient } from "agenomic-typescript";
 
-const client = new AgentLockClient();
+const client = new AgenomicClient();
 const trace = client.createTrace({
   agentId: "export-agent",
   input: { prompt: "Hello" },
@@ -151,7 +151,7 @@ const trace = client.createTrace({
 
 trace.complete({ output: { message: "done" } });
 
-await client.exportJsonl("./traces/agentlock.jsonl", [trace.build()]);
+await client.exportJsonl("./traces/agenomic.jsonl", [trace.build()]);
 ```
 
 Each line is a standalone `TraceEnvelope`.
@@ -161,7 +161,7 @@ Each line is a standalone `TraceEnvelope`.
 Redaction paths are dotted paths applied relative to captured payloads such as run input/output and event input/output.
 
 ```ts
-import { applyRedaction } from "agentlock-typescript";
+import { applyRedaction } from "agenomic-typescript";
 
 const scrubbed = applyRedaction(
   {
@@ -187,12 +187,12 @@ Supported modes:
 
 ```ts
 import {
-  AgentLockClient,
+  AgenomicClient,
   recordMCPToolCall,
   traceAgentRun,
-} from "agentlock-typescript";
+} from "agenomic-typescript";
 
-const client = new AgentLockClient();
+const client = new AgenomicClient();
 
 const run = traceAgentRun(
   {

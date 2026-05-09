@@ -24,7 +24,7 @@ export async function sendTraceToHttp(
 
   if (!response.ok) {
     throw new Error(
-      `AgentLock ingestion failed with ${response.status} ${response.statusText}`,
+      `Agenomic ingestion failed with ${response.status} ${response.statusText}`,
     );
   }
 }

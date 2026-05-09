@@ -4,13 +4,13 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { AgentLockClient } from "../src/client";
+import { AgenomicClient } from "../src/client";
 
 describe("JSONL export", () => {
   it("writes trace envelopes to disk", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "agentlock-"));
+    const directory = await mkdtemp(join(tmpdir(), "agenomic-"));
     const path = join(directory, "traces.jsonl");
-    const client = new AgentLockClient();
+    const client = new AgenomicClient();
     const trace = client.createTrace({
       agentId: "export-agent",
       input: { prompt: "Hello" },

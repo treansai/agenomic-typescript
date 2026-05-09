@@ -194,7 +194,7 @@ export interface CompleteTraceInput {
   error?: unknown;
 }
 
-export interface AgentLockClientOptions {
+export interface AgenomicClientOptions {
   apiKey?: string;
   endpoint?: string;
   headers?: Record<string, string>;

@@ -5,7 +5,7 @@ import { TraceEnvelopeSchema } from "../src/schemas";
 describe("schemas", () => {
   it("parses a valid trace envelope", () => {
     const parsed = TraceEnvelopeSchema.parse({
-      specVersion: "agentlock.trace.v1",
+      specVersion: "agenomic.trace.v1",
       generatedAt: new Date().toISOString(),
       run: {
         traceId: "trace_1",
@@ -23,7 +23,7 @@ describe("schemas", () => {
   it("rejects an invalid run status", () => {
     expect(() =>
       TraceEnvelopeSchema.parse({
-        specVersion: "agentlock.trace.v1",
+        specVersion: "agenomic.trace.v1",
         generatedAt: new Date().toISOString(),
         run: {
           traceId: "trace_1",

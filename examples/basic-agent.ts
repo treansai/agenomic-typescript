@@ -1,6 +1,6 @@
-import { AgentLockClient, recordMCPToolCall, traceAgentRun } from "../src/index";
+import { AgenomicClient, recordMCPToolCall, traceAgentRun } from "../src/index";
 
-const client = new AgentLockClient();
+const client = new AgenomicClient();
 
 const invokeClaimsAgent = traceAgentRun(
   {

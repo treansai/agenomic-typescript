@@ -1,6 +1,6 @@
-import { AgentLockClient, withTracedRoute } from "../src/index";
+import { AgenomicClient, withTracedRoute } from "../src/index";
 
-const client = new AgentLockClient();
+const client = new AgenomicClient();
 
 export const POST = withTracedRoute(
   {

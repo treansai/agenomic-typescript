@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { AgentLockClient } from "../src/client";
+import { AgenomicClient } from "../src/client";
 import { getCurrentTrace, traceAgentRun, type TraceBuilder } from "../src/tracing";
 
 describe("traceAgentRun", () => {
   it("captures success traces with hashes and events", async () => {
-    const client = new AgentLockClient();
+    const client = new AgenomicClient();
     let capturedTrace: TraceBuilder | undefined;
 
     const wrapped = traceAgentRun(
@@ -60,7 +60,7 @@ describe("traceAgentRun", () => {
   });
 
   it("captures errors and rethrows", async () => {
-    const client = new AgentLockClient();
+    const client = new AgenomicClient();
     let capturedTrace: TraceBuilder | undefined;
 
     const wrapped = traceAgentRun(
