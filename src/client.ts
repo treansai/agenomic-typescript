@@ -12,6 +12,7 @@ import { TraceBuilder } from "./tracing";
 export class AgenomicClient {
   readonly apiKey?: string;
   readonly endpoint?: string;
+  readonly baseUrl?: string;
   readonly headers?: Record<string, string>;
   /** Online tracking of production agents (drift / loops / intent / harness). */
   readonly tracking: TrackingResource;
@@ -19,6 +20,7 @@ export class AgenomicClient {
   constructor(options: AgenomicClientOptions = {}) {
     this.apiKey = options.apiKey;
     this.endpoint = options.endpoint;
+    this.baseUrl = options.baseUrl;
     this.headers = options.headers;
     this.tracking = new TrackingResource(this);
   }

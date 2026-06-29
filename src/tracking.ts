@@ -88,8 +88,13 @@ export interface WireTrackingEvent {
   metadata?: Record<string, unknown>;
 }
 
-function baseUrl(client: AgenomicClient): string | undefined {
-  return client.endpoint ? client.endpoint.replace(/\/+$/, "") : undefined;
+function apiBase(client: AgenomicClient): string | undefined {
+  // Prefer an explicit API base; otherwise derive it from the (possibly
+  // trace-path-suffixed) ingestion endpoint so tracking URLs hang off the API
+  // root, not `/v1/traces`.
+  const raw = client.baseUrl ?? client.endpoint;
+  if (!raw) return undefined;
+  return raw.replace(/\/+$/, "").replace(/\/v1\/traces$/, "");
 }
 
 async function postJson(
@@ -97,7 +102,7 @@ async function postJson(
   path: string,
   body: unknown,
 ): Promise<Record<string, unknown>> {
-  const base = baseUrl(client);
+  const base = apiBase(client);
   if (!base) {
     throw new Error("tracking cloud call requires an endpoint on the client");
   }
@@ -141,7 +146,7 @@ export class TrackingSession {
     this.sessionId = init.sessionId;
     this.agentId = init.agentId;
     this.environment = init.environment;
-    this.cloud = Boolean(baseUrl(client));
+    this.cloud = Boolean(apiBase(client));
   }
 
   /** Events buffered in local mode (empty in cloud mode). */
@@ -281,10 +286,12 @@ export class TrackingSession {
   /** Finalize the session. Idempotent. */
   async stop(): Promise<void> {
     if (this.stopped) return;
-    this.stopped = true;
+    // Mark stopped only after a successful stop so a failed cloud POST stays
+    // retryable and the remote session isn't orphaned.
     if (this.cloud) {
       await postJson(this.client, `/v1/tracking/sessions/${this.sessionId}/stop`, {});
     }
+    this.stopped = true;
   }
 
   /** Fetch the tracking report (cloud mode only). */
@@ -294,7 +301,7 @@ export class TrackingSession {
         "report() requires cloud mode; in local mode export events with toJsonl() and run `agenomic track report`",
       );
     }
-    const base = baseUrl(this.client)!;
+    const base = apiBase(this.client)!;
     const response = await fetch(`${base}/v1/tracking/sessions/${this.sessionId}/report`, {
       headers: {
         ...(this.client.apiKey ? { authorization: `Bearer ${this.client.apiKey}` } : {}),
@@ -320,7 +327,7 @@ export class TrackingResource {
   /** Start a new online-tracking session. */
   async start(options: TrackingStartOptions): Promise<TrackingSession> {
     const environment = options.environment ?? "production";
-    if (baseUrl(this.client)) {
+    if (apiBase(this.client)) {
       const body = {
         spec_version: "agenomic/v0.3",
         agent_id: options.agent,
@@ -332,7 +339,12 @@ export class TrackingResource {
       };
       const res = await postJson(this.client, "/v1/tracking/sessions", body);
       const session = (res.session ?? res) as Record<string, unknown>;
-      const sessionId = (session.session_id as string) ?? createId("trk");
+      const sessionId = session.session_id;
+      if (typeof sessionId !== "string" || sessionId.length === 0) {
+        throw new Error(
+          "Agenomic tracking start response did not include a session_id",
+        );
+      }
       return new TrackingSession(this.client, {
         sessionId,
         agentId: options.agent,

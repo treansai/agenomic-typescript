@@ -114,4 +114,71 @@ describe("client.tracking (cloud mode)", () => {
       /failed with 500/,
     );
   });
+
+  it("derives the API base from a trace-path endpoint", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        urls.push(url);
+        return new Response(JSON.stringify({ session: { session_id: "s1" } }), { status: 200 });
+      }),
+    );
+    // endpoint configured for trace ingestion (per the README) must not leak
+    // its /v1/traces path into tracking URLs.
+    const client = new AgenomicClient({ endpoint: "https://api.agenomic.dev/v1/traces" });
+    await client.tracking.start({ agent: "agent://a/b" });
+    expect(urls[0]).toBe("https://api.agenomic.dev/v1/tracking/sessions");
+  });
+
+  it("honors an explicit baseUrl over endpoint", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        urls.push(url);
+        return new Response(JSON.stringify({ session: { session_id: "s1" } }), { status: 200 });
+      }),
+    );
+    const client = new AgenomicClient({
+      endpoint: "https://ingest.example/v1/traces",
+      baseUrl: "https://api.example",
+    });
+    await client.tracking.start({ agent: "agent://a/b" });
+    expect(urls[0]).toBe("https://api.example/v1/tracking/sessions");
+  });
+
+  it("rejects a start response without a session_id", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ session: {} }), { status: 200 })),
+    );
+    const client = new AgenomicClient({ endpoint: "https://api.agenomic.dev" });
+    await expect(client.tracking.start({ agent: "agent://a/b" })).rejects.toThrow(
+      /did not include a session_id/,
+    );
+  });
+
+  it("keeps stop retryable when the cloud POST fails", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls += 1;
+        if (url.endsWith("/sessions")) {
+          return new Response(JSON.stringify({ session: { session_id: "s1" } }), { status: 200 });
+        }
+        // first stop fails, second succeeds
+        if (url.endsWith("/stop") && calls === 2) {
+          return new Response("err", { status: 503, statusText: "unavailable" });
+        }
+        return new Response("{}", { status: 200 });
+      }),
+    );
+    const client = new AgenomicClient({ endpoint: "https://api.agenomic.dev" });
+    const session = await client.tracking.start({ agent: "agent://a/b" });
+    await expect(session.stop()).rejects.toThrow();
+    // not marked stopped → a retry actually issues another request and succeeds
+    await expect(session.stop()).resolves.toBeUndefined();
+  });
 });
