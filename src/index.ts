@@ -1,4 +1,12 @@
 export { AgenomicClient } from "./client";
+export {
+  TrackingResource,
+  TrackingSession,
+  type TrackingStartOptions,
+  type TrackingEventInput,
+  type TrackingEventType,
+  type WireTrackingEvent,
+} from "./tracking";
 export { exportTracesToJsonl } from "./exporters/jsonl";
 export { sendTraceToHttp } from "./exporters/http";
 export { instrumentOpenAI } from "./integrations/openai";

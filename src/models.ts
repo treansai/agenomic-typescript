@@ -196,7 +196,14 @@ export interface CompleteTraceInput {
 
 export interface AgenomicClientOptions {
   apiKey?: string;
+  /** Trace-ingestion endpoint (may include the `/v1/traces` path). */
   endpoint?: string;
+  /**
+   * API base URL for resource APIs (e.g. tracking), e.g.
+   * `https://api.agenomic.example`. When omitted, the base is derived from
+   * `endpoint` with a trailing `/v1/traces` stripped.
+   */
+  baseUrl?: string;
   headers?: Record<string, string>;
 }
 
