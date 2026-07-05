@@ -10,6 +10,7 @@ Lightweight TypeScript SDK for instrumenting Node.js and TypeScript AI agents an
 - HTTP ingestion client with no required external dependencies
 - PII redaction hooks with `remove`, `mask`, and `hash` modes
 - OpenAI wrapper placeholder with optional lightweight proxy instrumentation
+- Hugging Face connection: provider normalization, Hub metadata + credential validation, inference, model locking, and tracing
 - MCP tool call helper types and recorders
 - Next.js-friendly route handler wrapper
 
@@ -217,6 +218,30 @@ const run = traceAgentRun(
 ## OpenAI Wrapper Placeholder
 
 `instrumentOpenAI()` does not require the OpenAI SDK as a dependency. Pass any client-like object exposing `responses.create()` or `chat.completions.create()` and the wrapper will record basic `model_call` events when a trace is active.
+
+## Hugging Face Connection
+
+Configure, pin, and call Hugging Face models. The API token is never logged,
+returned, or embedded in any object, trace, or error.
+
+```ts
+import { AgenomicClient, HuggingFaceClient, lockModel } from "agenomic-typescript";
+
+const client = new AgenomicClient();
+await client.models.configure({
+  provider: "huggingface", // also accepts "hf", "hugging_face"
+  model: "mistralai/Mistral-7B-Instruct-v0.3",
+  task: "text-generation",
+});
+
+const hf = new HuggingFaceClient(); // reads HUGGINGFACE_API_TOKEN / HF_TOKEN
+await hf.validateCredentials();
+const meta = await hf.resolveModelMetadata("mistralai/Mistral-7B-Instruct-v0.3");
+const lock = lockModel(meta); // credential-free, hash-pinned lock block
+```
+
+See [docs/providers/huggingface.md](docs/providers/huggingface.md) for the full
+reference (env vars, `instrumentHuggingFace`, redaction, and locking).
 
 ## Trace Schema Compatibility
 

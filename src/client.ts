@@ -6,6 +6,7 @@ import type {
   TraceEnvelope,
 } from "./models";
 import { TraceEnvelopeSchema } from "./schemas";
+import { ModelsResource } from "./models-resource";
 import { TrackingResource } from "./tracking";
 import { TraceBuilder } from "./tracing";
 
@@ -16,6 +17,8 @@ export class AgenomicClient {
   readonly headers?: Record<string, string>;
   /** Online tracking of production agents (drift / loops / intent / harness). */
   readonly tracking: TrackingResource;
+  /** Model configuration (provider-agnostic; validates known providers). */
+  readonly models: ModelsResource;
 
   constructor(options: AgenomicClientOptions = {}) {
     this.apiKey = options.apiKey;
@@ -23,6 +26,7 @@ export class AgenomicClient {
     this.baseUrl = options.baseUrl;
     this.headers = options.headers;
     this.tracking = new TrackingResource(this);
+    this.models = new ModelsResource(this);
   }
 
   async emitTrace(trace: TraceEnvelope): Promise<void> {

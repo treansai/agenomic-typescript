@@ -11,6 +11,33 @@ export { exportTracesToJsonl } from "./exporters/jsonl";
 export { sendTraceToHttp } from "./exporters/http";
 export { instrumentOpenAI } from "./integrations/openai";
 export {
+  instrumentHuggingFace,
+  type HuggingFaceInstrumentationOptions,
+} from "./integrations/huggingface";
+export {
+  HuggingFaceClient,
+  HuggingFaceConfig,
+  HuggingFaceError,
+  HuggingFaceAuthError,
+  HUGGINGFACE_PROVIDER,
+  HUGGINGFACE_HUB_URL,
+  HUGGINGFACE_INFERENCE_URL,
+  HUGGINGFACE_DEFAULT_TIMEOUT_SECONDS,
+  isHuggingFace,
+  normalizeProvider,
+  redactToken,
+  lockModel,
+  type HuggingFaceConfigInit,
+  type HuggingFaceClientOptions,
+  type HuggingFaceModelMetadata,
+  type HuggingFaceLock,
+} from "./providers/huggingface";
+export {
+  ModelsResource,
+  type ConfigureModelInput,
+  type ModelConfig,
+} from "./models-resource";
+export {
   createMCPToolCall,
   recordMCPToolCall,
   type MCPToolCall,
