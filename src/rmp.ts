@@ -596,20 +596,40 @@ export class MonitorResource {
     return session;
   }
 
-  /** Emit an event onto a session by id (resource-level convenience). */
+  /**
+   * Emit an event onto a session by id (resource-level convenience).
+   *
+   * The event is stamped with the RMP wire metadata before posting, like
+   * `MonitorSession.event()`. Since no session state exists here, callers
+   * may supply `agent_id` / `sequence_number` in the input to override the
+   * defaults (`""` / `0`); the server orders events by its own session
+   * record and deduplicates on `event_id`.
+   */
   async event(options: {
     sessionId: string;
     event: MonitorEventInput;
   }): Promise<WireMonitorEvent> {
     if (apiBase(this.client)) {
-      if (typeof options.event.type !== "string" || options.event.type.length === 0) {
+      const input = options.event;
+      if (typeof input.type !== "string" || input.type.length === 0) {
         throw new Error("monitor event requires a non-empty string `type`");
       }
+      const wire: WireMonitorEvent = {
+        ...input,
+        spec_version: RMP_SPEC_VERSION,
+        event_id: typeof input.event_id === "string" ? input.event_id : createId("evt"),
+        session_id: options.sessionId,
+        timestamp: typeof input.timestamp === "string" ? input.timestamp : nowIso(),
+        sequence_number:
+          typeof input.sequence_number === "number" ? input.sequence_number : 0,
+        type: input.type,
+        agent_id: typeof input.agent_id === "string" ? input.agent_id : "",
+      };
       const res = await requestJson(
         this.client,
         "POST",
         `/v1/monitor/sessions/${encodeURIComponent(options.sessionId)}/events`,
-        options.event,
+        wire,
       );
       return (res.event ?? res) as unknown as WireMonitorEvent;
     }

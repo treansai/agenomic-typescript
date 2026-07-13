@@ -230,6 +230,30 @@ describe("RMP (cloud mode)", () => {
     expect(session.events).toHaveLength(0);
   });
 
+  it("resource-level monitor.event stamps wire metadata in cloud mode", async () => {
+    const calls = stubFetch(() => ({}));
+    await cloudClient().monitor.event({
+      sessionId: "mon_cloud_9",
+      event: { type: "tool.call.completed", tool_name: "db.lookup" },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      url: "https://api.agenomic.dev/v1/monitor/sessions/mon_cloud_9/events",
+      method: "POST",
+      body: {
+        spec_version: "agenomic.rmp/v0.1",
+        session_id: "mon_cloud_9",
+        sequence_number: 0,
+        type: "tool.call.completed",
+        tool_name: "db.lookup",
+      },
+    });
+    const body = calls[0]!.body as Record<string, unknown>;
+    expect(typeof body.event_id).toBe("string");
+    expect(typeof body.timestamp).toBe("string");
+  });
+
   it("protect.alerts GETs with a session_id query", async () => {
     const alert = {
       alert_id: "al_1",
