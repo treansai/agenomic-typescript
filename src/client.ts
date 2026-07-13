@@ -7,6 +7,12 @@ import type {
 } from "./models";
 import { TraceEnvelopeSchema } from "./schemas";
 import { ModelsResource } from "./models-resource";
+import {
+  MonitorResource,
+  ProtectResource,
+  ReviewResource,
+  RmpResource,
+} from "./rmp";
 import { TrackingResource } from "./tracking";
 import { TraceBuilder } from "./tracing";
 
@@ -19,6 +25,14 @@ export class AgenomicClient {
   readonly tracking: TrackingResource;
   /** Model configuration (provider-agnostic; validates known providers). */
   readonly models: ModelsResource;
+  /** Review · Monitor · Protect loop sessions (`agenomic.rmp/v0.1`). */
+  readonly rmp: RmpResource;
+  /** Pre-release scenario testing and enrichment approvals. */
+  readonly review: ReviewResource;
+  /** Runtime detection sessions and findings. */
+  readonly monitor: MonitorResource;
+  /** Alerts, action plans, recommendations, and routing. */
+  readonly protect: ProtectResource;
 
   constructor(options: AgenomicClientOptions = {}) {
     this.apiKey = options.apiKey;
@@ -27,6 +41,10 @@ export class AgenomicClient {
     this.headers = options.headers;
     this.tracking = new TrackingResource(this);
     this.models = new ModelsResource(this);
+    this.rmp = new RmpResource(this);
+    this.review = new ReviewResource(this);
+    this.monitor = new MonitorResource(this);
+    this.protect = new ProtectResource(this);
   }
 
   async emitTrace(trace: TraceEnvelope): Promise<void> {
