@@ -347,6 +347,29 @@ export class RmpResource {
     return session;
   }
 
+  /**
+   * End a session (idempotent), freeing its (agent, environment) slot so a
+   * later `start()` opens a fresh session instead of reusing this one.
+   */
+  async stop(sessionId: string): Promise<RmpSession> {
+    if (apiBase(this.client)) {
+      const res = await requestJson(
+        this.client,
+        "POST",
+        `/v1/rmp/sessions/${encodeURIComponent(sessionId)}/stop`,
+        {},
+      );
+      return (res.session ?? res) as unknown as RmpSession;
+    }
+    const session = this.local.get(sessionId);
+    if (!session) {
+      throw new Error(`unknown local RMP session: ${sessionId}`);
+    }
+    session.status = "stopped";
+    this.local.set(sessionId, session);
+    return session;
+  }
+
   /** Fetch one RMP session. Local mode returns the buffered session, if any. */
   async get(sessionId: string): Promise<RmpSession | undefined> {
     if (apiBase(this.client)) {
