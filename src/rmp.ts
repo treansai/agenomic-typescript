@@ -347,6 +347,24 @@ export class RmpResource {
     return session;
   }
 
+  /**
+   * End a local RMP session, freeing its (agent, environment) slot so a
+   * later `start()` opens a fresh session instead of reusing this one.
+   * Cloud sessions have no stop endpoint yet; use `report()` there instead.
+   */
+  async stop(sessionId: string): Promise<RmpSession> {
+    if (apiBase(this.client)) {
+      throw new Error("cloud RMP sessions cannot be stopped from the SDK yet");
+    }
+    const session = this.local.get(sessionId);
+    if (!session) {
+      throw new Error(`unknown local RMP session: ${sessionId}`);
+    }
+    session.status = "stopped";
+    this.local.set(sessionId, session);
+    return session;
+  }
+
   /** Fetch one RMP session. Local mode returns the buffered session, if any. */
   async get(sessionId: string): Promise<RmpSession | undefined> {
     if (apiBase(this.client)) {

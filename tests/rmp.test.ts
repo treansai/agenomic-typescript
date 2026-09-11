@@ -58,6 +58,30 @@ describe("RMP (local mode)", () => {
     expect(await client.rmp.list()).toHaveLength(2);
   });
 
+  it("stop() frees the slot for a new session", async () => {
+    const client = new AgenomicClient();
+    const first = await client.rmp.start({
+      agent: "agent://treans/claims-agent",
+      environment: "development",
+    });
+
+    const stopped = await client.rmp.stop(first.session_id);
+    expect(stopped.status).toBe("stopped");
+    expect((await client.rmp.get(first.session_id))?.status).toBe("stopped");
+
+    const second = await client.rmp.start({
+      agent: "agent://treans/claims-agent",
+      environment: "development",
+    });
+    expect(second.session_id).not.toBe(first.session_id);
+    expect(second.status).toBe("active");
+  });
+
+  it("stop() throws for an unknown local session", async () => {
+    const client = new AgenomicClient();
+    await expect(client.rmp.stop("rmp_missing")).rejects.toThrow(/unknown local rmp session/i);
+  });
+
   it("monitor sessions stamp and buffer events", async () => {
     const client = new AgenomicClient();
     const session = await client.monitor.start({ agent: "agent://acme/a" });
@@ -216,6 +240,13 @@ describe("RMP (cloud mode)", () => {
       },
     });
     expect(session.session_id).toBe("rmp_cloud_1");
+  });
+
+  it("rmp.stop throws in cloud mode (no stop endpoint yet)", async () => {
+    stubFetch(() => ({}));
+    await expect(cloudClient().rmp.stop("rmp_1")).rejects.toThrow(
+      /cannot be stopped from the sdk/i,
+    );
   });
 
   it("monitor sessions POST stamped events", async () => {
