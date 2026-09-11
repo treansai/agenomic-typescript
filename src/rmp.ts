@@ -321,6 +321,17 @@ export class RmpResource {
         ...session,
       } as RmpSession;
     }
+    // At most one active session per (agent, environment): reuse it
+    // instead of piling up duplicates, mirroring the cloud service.
+    for (const existing of this.local.values()) {
+      if (
+        existing.agent_id === options.agent &&
+        existing.environment === environment &&
+        existing.status === "active"
+      ) {
+        return existing;
+      }
+    }
     const session: RmpSession = {
       spec_version: RMP_SPEC_VERSION,
       session_id: createId("rmp"),

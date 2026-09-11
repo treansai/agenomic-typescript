@@ -37,6 +37,27 @@ describe("RMP (local mode)", () => {
     });
   });
 
+  it("reuses the active session for the same agent and environment", async () => {
+    const client = new AgenomicClient();
+    const first = await client.rmp.start({
+      agent: "agent://treans/claims-agent",
+      environment: "development",
+    });
+    const second = await client.rmp.start({
+      agent: "agent://treans/claims-agent",
+      environment: "development",
+    });
+    expect(second.session_id).toBe(first.session_id);
+    expect(await client.rmp.list()).toEqual([first]);
+
+    const prod = await client.rmp.start({
+      agent: "agent://treans/claims-agent",
+      environment: "production",
+    });
+    expect(prod.session_id).not.toBe(first.session_id);
+    expect(await client.rmp.list()).toHaveLength(2);
+  });
+
   it("monitor sessions stamp and buffer events", async () => {
     const client = new AgenomicClient();
     const session = await client.monitor.start({ agent: "agent://acme/a" });
