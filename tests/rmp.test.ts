@@ -242,11 +242,17 @@ describe("RMP (cloud mode)", () => {
     expect(session.session_id).toBe("rmp_cloud_1");
   });
 
-  it("rmp.stop throws in cloud mode (no stop endpoint yet)", async () => {
-    stubFetch(() => ({}));
-    await expect(cloudClient().rmp.stop("rmp_1")).rejects.toThrow(
-      /cannot be stopped from the sdk/i,
-    );
+  it("rmp.stop POSTs to the session stop route", async () => {
+    const calls = stubFetch(() => ({ session: { session_id: "rmp_1", status: "stopped" } }));
+    const session = await cloudClient().rmp.stop("rmp_1");
+    expect(session.status).toBe("stopped");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      url: "https://api.agenomic.dev/v1/rmp/sessions/rmp_1/stop",
+      method: "POST",
+      auth: "Bearer key_123",
+    });
   });
 
   it("monitor sessions POST stamped events", async () => {
