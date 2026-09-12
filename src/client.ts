@@ -13,6 +13,7 @@ import {
   ReviewResource,
   RmpResource,
 } from "./rmp";
+import { ToolsResource } from "./tools";
 import { TrackingResource } from "./tracking";
 import { TraceBuilder } from "./tracing";
 
@@ -33,6 +34,8 @@ export class AgenomicClient {
   readonly monitor: MonitorResource;
   /** Alerts, action plans, recommendations, and routing. */
   readonly protect: ProtectResource;
+  /** Replay tool execution: Tool Gateway (real calls) and Tool Mock Engine. */
+  readonly tools: ToolsResource;
 
   constructor(options: AgenomicClientOptions = {}) {
     this.apiKey = options.apiKey;
@@ -45,6 +48,7 @@ export class AgenomicClient {
     this.review = new ReviewResource(this);
     this.monitor = new MonitorResource(this);
     this.protect = new ProtectResource(this);
+    this.tools = new ToolsResource(this);
   }
 
   async emitTrace(trace: TraceEnvelope): Promise<void> {
