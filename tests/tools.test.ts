@@ -90,6 +90,7 @@ describe("tools (cloud mode)", () => {
 
   it("router routes remote tools, reports local functions and raises typed errors", async () => {
     const calls = stubFetch((url, body) => {
+      if (url.endsWith("/local/authorize")) return { body: { decision: "local", record_id: "rec_local" } };
       if (url.endsWith("/report-local")) return { body: { record_id: "rec_local" } };
       if (body?.tool === "tickets.get") return { body: envelope({ error: { code: "not_found", message: "gone" } }, "scenario", "error") };
       return { body: envelope({ delivered: true }) };
@@ -97,9 +98,62 @@ describe("tools (cloud mode)", () => {
     const router = cloud().tools.router(RUN, { localFunctions: { "math.add": (a) => ({ sum: Number(a.a) + Number(a.b) }) } });
     expect(await router.call("email.send", { to: "a@example.test" })).toEqual({ delivered: true });
     expect(await router.wrap<{ sum: number }>("math.add")({ a: 2, b: 3 })).toEqual({ sum: 5 });
-    expect(calls[1]!.body).toMatchObject({ tool: "math.add", result: { sum: 5 }, is_error: false, logical_call_id: "math.add#2" });
+    expect(calls.map((c) => c.url.split("/").pop())).toEqual(["invoke", "authorize", "report-local"]);
+    expect(calls[1]!.body).toMatchObject({ tool: "math.add", logical_call_id: "math.add#2" });
+    expect(calls[2]!.body).toMatchObject({ tool: "math.add", result: { sum: 5 }, is_error: false, logical_call_id: "math.add#2" });
     await expect(router.call("tickets.get", { ticket_id: "x" })).rejects.toBeInstanceOf(ToolCallError);
-    expect(router.summary()).toEqual({ calls: 3, bySource: { static: 1, runtime_local: 1, scenario: 1 }, hasRealCalls: true });
+    expect(router.summary()).toEqual({ calls: 3, bySource: { static: 1, runtime_local: 1, scenario: 1 }, hasRealCalls: true, unreported: 0 });
+  });
+
+  it("offline router refuses before running local functions", async () => {
+    const effects: string[] = [];
+    const router = new AgenomicClient().tools.router(RUN, { localFunctions: { "email.send": () => effects.push("sent") } });
+    await expect(router.call("email.send")).rejects.toMatchObject({ code: "cloud_required" });
+    expect(effects).toEqual([]);
+    expect(router.summary().calls).toBe(0);
+  });
+
+  it.each(["live_call_denied", "run_not_active", "live_budget_exhausted"])("%s is refused before any local side effect", async (code) => {
+    const effects: string[] = [];
+    const calls = stubFetch(() => ({ status: 400, body: { error: { code, message: "rejected by gateway" } } }));
+    const router = cloud().tools.router(RUN, { localFunctions: { "email.send": () => effects.push("sent") } });
+    await expect(router.call("email.send")).rejects.toMatchObject({ code });
+    expect(effects).toEqual([]);
+    expect(calls.map((c) => c.url.split("/").pop())).toEqual(["authorize"]);
+  });
+
+  it("routes a mock-bound tool to the gateway instead of the local function", async () => {
+    const effects: string[] = [];
+    stubFetch((url) => {
+      if (url.endsWith("/local/authorize")) return { body: { decision: "gateway" } };
+      return { body: envelope({ delivered: true, mocked: true }) };
+    });
+    const router = cloud().tools.router(RUN, { localFunctions: { "email.send": () => effects.push("sent") } });
+    expect(await router.call("email.send", { to: "a@example.test" })).toEqual({ delivered: true, mocked: true });
+    expect(effects).toEqual([]);
+    expect(router.summary().hasRealCalls).toBe(false);
+  });
+
+  it("keeps local evidence as unreported when the report fails", async () => {
+    const effects: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/local/authorize")) return new Response(JSON.stringify({ decision: "local", record_id: "rec_pending" }), { status: 200 });
+      return new Response("<html>Bad Gateway</html>", { status: 502 });
+    });
+    const router = cloud().tools.router(RUN, { localFunctions: { "email.send": () => { effects.push("sent"); return { ok: true }; } } });
+    await expect(router.call("email.send", { to: "a@example.test" })).rejects.toMatchObject({ code: "http_error", status: 502 });
+    expect(effects).toEqual(["sent"]);
+    expect(router.calls).toHaveLength(1);
+    expect(router.calls[0]!.agenomic).toMatchObject({ record_id: "rec_pending", reported: false, external_state: "indeterminate" });
+    expect(router.summary()).toEqual({ calls: 1, bySource: { runtime_local: 1 }, hasRealCalls: true, unreported: 1 });
+  });
+
+  it("keeps the HTTP status on a non-JSON error body", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<html>Bad Gateway</html>", { status: 502 }));
+    await expect(cloud().tools.adapters()).rejects.toMatchObject({ name: "ToolExecutionError", code: "http_error", status: 502 });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<html>ok</html>", { status: 200 }));
+    await expect(cloud().tools.adapters()).rejects.toMatchObject({ code: "invalid_response", status: 200 });
   });
 
   it("surfaces server error codes", async () => {

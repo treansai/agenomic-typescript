@@ -19,7 +19,7 @@ export type ToolResultSource =
   | "plugin"
   | "runtime_local"
   | "unrouted";
-export type ToolInvocationStatus = "success" | "error" | "aborted" | "timeout";
+export type ToolInvocationStatus = "success" | "error" | "aborted" | "timeout" | "pending";
 export type ToolExternalState = "none" | "confirmed" | "indeterminate";
 
 export interface ToolProvenance {
@@ -44,6 +44,8 @@ export interface ToolCallEnvelope {
   duration_ms: number;
   virtual_time?: string;
   expected_error: boolean;
+  /** False when a local function ran but its report never reached the gateway. */
+  reported?: boolean;
 }
 
 /** Native tool result plus the Agenomic technical envelope. */
@@ -162,15 +164,29 @@ export class ToolsResource {
     } catch (error) {
       throw new ToolExecutionError("transport_error", `${method} ${path} failed: ${String(error)}`, 0);
     }
-    const text = await response.text();
-    const parsed = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (error) {
+      throw new ToolExecutionError("transport_error", `${method} ${path} body read failed: ${String(error)}`, response.status);
+    }
+    let parsed: Record<string, unknown> | undefined;
+    try {
+      const value: unknown = text ? JSON.parse(text) : {};
+      parsed = value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+    } catch {
+      parsed = undefined;
+    }
     if (!response.ok) {
-      const error = (parsed.error ?? {}) as { code?: string; message?: string };
+      const error = (parsed?.error ?? {}) as { code?: string; message?: string };
       throw new ToolExecutionError(
         error.code ?? "http_error",
         error.message ?? `${method} ${path} returned ${response.status}`,
         response.status,
       );
+    }
+    if (parsed === undefined) {
+      throw new ToolExecutionError("invalid_response", `${method} ${path} returned a non-JSON body`, response.status);
     }
     return parsed;
   }
@@ -332,16 +348,43 @@ export class ToolsResource {
   }
 
   /** Record a call the runtime executed itself (local adapter). */
+  /**
+   * Ask the gateway whether a local function may run for this call. `local`
+   * reserves budget and records a pending invocation; `gateway` means the run
+   * binds the tool to a mock or a non-local adapter and `invoke` must be used.
+   * Refusals throw before anything executes.
+   */
+  async authorizeLocal(
+    runId: string,
+    tool: string,
+    args: Record<string, unknown>,
+    options: InvokeOptions & { logicalCallId: string },
+  ): Promise<{ decision: "local" | "gateway"; recordId?: string }> {
+    const res = await this.request("POST", `/v1/tool-execution/runs/${runId}/local/authorize`, {
+      repetition: options.repetition ?? 1,
+      logical_call_id: options.logicalCallId,
+      attempt: options.attempt ?? 1,
+      tool,
+      arguments: args,
+      ...(options.parentCallId ? { parent_call_id: options.parentCallId } : {}),
+    });
+    return {
+      decision: res.decision === "local" ? "local" : "gateway",
+      ...(res.record_id !== undefined ? { recordId: String(res.record_id) } : {}),
+    };
+  }
+
+  /** Settle a call previously accepted by `authorizeLocal`. */
   async reportLocal(
     runId: string,
     tool: string,
     args: Record<string, unknown>,
     result: unknown,
-    options: InvokeOptions & { isError?: boolean; durationMs?: number } = {},
+    options: InvokeOptions & { logicalCallId: string; isError?: boolean; durationMs?: number },
   ): Promise<string> {
     const res = await this.request("POST", `/v1/tool-execution/runs/${runId}/report-local`, {
       repetition: options.repetition ?? 1,
-      logical_call_id: options.logicalCallId ?? `call_${crypto.randomUUID().replace(/-/g, "")}`,
+      logical_call_id: options.logicalCallId,
       attempt: options.attempt ?? 1,
       tool,
       arguments: args,
@@ -390,39 +433,15 @@ export class ToolRouter {
     const logicalCallId = options.logicalCallId ?? this.nextCallId(tool);
     const local = this.options.localFunctions?.[tool];
     if (local) {
-      const started = Date.now();
-      let value: unknown;
-      let isError = false;
-      try {
-        value = await local(args);
-      } catch (error) {
-        value = { code: (error as Error)?.name ?? "Error", message: String((error as Error)?.message ?? error) };
-        isError = true;
-      }
-      const durationMs = Date.now() - started;
-      const recordId = await this.tools.reportLocal(this.runId, tool, args, value, {
-        isError,
-        durationMs,
+      const decision = await this.tools.authorizeLocal(this.runId, tool, args, {
         logicalCallId,
         repetition: this.options.repetition,
         attempt: options.attempt,
         parentCallId: options.parentCallId,
       });
-      const envelope: ToolCallResult = {
-        result: isError ? { error: value } : value,
-        agenomic: {
-          record_id: recordId,
-          status: isError ? "error" : "success",
-          provenance: { source: "runtime_local", fidelity: "live", binding_mode: "live" },
-          external_state: "confirmed",
-          effects: [],
-          duration_ms: durationMs,
-          expected_error: false,
-        },
-      };
-      this.calls.push(envelope);
-      if (isError && raise) throw new ToolCallError(tool, envelope);
-      return envelope.result as T;
+      if (decision.decision === "local") {
+        return this.runLocal<T>(local, tool, args, { ...options, logicalCallId, recordId: decision.recordId ?? "" });
+      }
     }
     const envelope = await this.tools.invoke<T>(this.runId, tool, args, {
       logicalCallId,
@@ -435,6 +454,56 @@ export class ToolRouter {
     return envelope.result;
   }
 
+  private async runLocal<T>(
+    local: (args: Record<string, unknown>) => unknown | Promise<unknown>,
+    tool: string,
+    args: Record<string, unknown>,
+    options: { parentCallId?: string; attempt?: number; logicalCallId: string; recordId: string },
+  ): Promise<T> {
+    const raise = this.options.raiseOnError ?? true;
+    const started = Date.now();
+    let value: unknown;
+    let isError = false;
+    try {
+      value = await local(args);
+    } catch (error) {
+      value = { code: (error as Error)?.name ?? "Error", message: String((error as Error)?.message ?? error) };
+      isError = true;
+    }
+    const durationMs = Date.now() - started;
+    const envelope: ToolCallResult = {
+      result: isError ? { error: value } : value,
+      agenomic: {
+        record_id: options.recordId,
+        status: isError ? "error" : "success",
+        provenance: { source: "runtime_local", fidelity: "live", binding_mode: "live" },
+        external_state: "confirmed",
+        effects: [],
+        duration_ms: durationMs,
+        expected_error: false,
+        reported: true,
+      },
+    };
+    try {
+      await this.tools.reportLocal(this.runId, tool, args, value, {
+        isError,
+        durationMs,
+        logicalCallId: options.logicalCallId,
+        repetition: this.options.repetition,
+        attempt: options.attempt,
+        parentCallId: options.parentCallId,
+      });
+    } catch (error) {
+      envelope.agenomic.reported = false;
+      envelope.agenomic.external_state = "indeterminate";
+      this.calls.push(envelope);
+      throw error;
+    }
+    this.calls.push(envelope);
+    if (isError && raise) throw new ToolCallError(tool, envelope);
+    return envelope.result as T;
+  }
+
   /** A function `(args) => result` routed through this run. */
   wrap<T = unknown>(tool: string): (args?: Record<string, unknown>) => Promise<T> {
     return (args = {}) => this.call<T>(tool, args);
@@ -444,12 +513,13 @@ export class ToolRouter {
     return this.calls.some((c) => c.agenomic.provenance.source === "live" || c.agenomic.provenance.source === "runtime_local");
   }
 
-  summary(): { calls: number; bySource: Record<string, number>; hasRealCalls: boolean } {
+  summary(): { calls: number; bySource: Record<string, number>; hasRealCalls: boolean; unreported: number } {
     const bySource: Record<string, number> = {};
     for (const c of this.calls) {
       const source = c.agenomic.provenance.source;
       bySource[source] = (bySource[source] ?? 0) + 1;
     }
-    return { calls: this.calls.length, bySource, hasRealCalls: this.hasRealCalls };
+    const unreported = this.calls.filter((c) => c.agenomic.reported === false).length;
+    return { calls: this.calls.length, bySource, hasRealCalls: this.hasRealCalls, unreported };
   }
 }

@@ -238,8 +238,15 @@ try {
 } catch (error) {
   if (error instanceof ToolCallError) console.log(error.code, error.envelope.agenomic.provenance);
 }
-console.log(router.summary());
+console.log(router.summary()); // { calls, bySource, hasRealCalls, unreported }
 ```
+
+Functions passed as `localFunctions` never run before the gateway allows
+them: the router calls `local/authorize` first (budget reserved, pending
+record), executes only on a `local` decision, routes the call through the
+gateway when the run binds the tool to a mock, and settles the record with
+`report-local`. If the report fails, the call stays in `router.calls` with
+`reported: false` and `external_state: "indeterminate"`.
 
 ## OpenAI Wrapper Placeholder
 
