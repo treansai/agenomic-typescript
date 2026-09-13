@@ -10,6 +10,10 @@ provides a typed client surface over it.
 The wire format is snake_case JSON with `spec_version: "agenomic.rmp/v0.1"`
 (reports use `report_version: "agenomic.rmp.report/v0.1"`).
 
+Starting a session never executes the agent or a benchmark. Benchmark suites
+are planned and launched explicitly through `client.benchmarks`, and your agent
+takes part through `BridgeServer`; see [benchmarks.md](benchmarks.md).
+
 ## Local-first
 
 Like `client.tracking`, every RMP resource is local-first. Without a

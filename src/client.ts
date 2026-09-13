@@ -13,6 +13,7 @@ import {
   ReviewResource,
   RmpResource,
 } from "./rmp";
+import { BenchmarksResource } from "./benchmarks";
 import { TrackingResource } from "./tracking";
 import { TraceBuilder } from "./tracing";
 
@@ -33,6 +34,8 @@ export class AgenomicClient {
   readonly monitor: MonitorResource;
   /** Alerts, action plans, recommendations, and routing. */
   readonly protect: ProtectResource;
+  /** RMP benchmarks (cloud only): catalogue, plans, launches, runs, policies. */
+  readonly benchmarks: BenchmarksResource;
 
   constructor(options: AgenomicClientOptions = {}) {
     this.apiKey = options.apiKey;
@@ -45,6 +48,7 @@ export class AgenomicClient {
     this.review = new ReviewResource(this);
     this.monitor = new MonitorResource(this);
     this.protect = new ProtectResource(this);
+    this.benchmarks = new BenchmarksResource(this);
   }
 
   async emitTrace(trace: TraceEnvelope): Promise<void> {
