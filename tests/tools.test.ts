@@ -122,6 +122,15 @@ describe("tools (cloud mode)", () => {
     expect(calls.map((c) => c.url.split("/").pop())).toEqual(["authorize"]);
   });
 
+  it("refuses to execute when the authorization carries no record id", async () => {
+    const effects: string[] = [];
+    stubFetch(() => ({ body: { decision: "local" } }));
+    const router = cloud().tools.router(RUN, { localFunctions: { "email.send": () => effects.push("sent") } });
+    await expect(router.call("email.send")).rejects.toMatchObject({ code: "invalid_response" });
+    expect(effects).toEqual([]);
+    expect(router.summary().calls).toBe(0);
+  });
+
   it("routes a mock-bound tool to the gateway instead of the local function", async () => {
     const effects: string[] = [];
     stubFetch((url) => {

@@ -440,7 +440,10 @@ export class ToolRouter {
         parentCallId: options.parentCallId,
       });
       if (decision.decision === "local") {
-        return this.runLocal<T>(local, tool, args, { ...options, logicalCallId, recordId: decision.recordId ?? "" });
+        if (!decision.recordId) {
+          throw new ToolExecutionError("invalid_response", `local/authorize accepted ${tool} without a record_id; refusing to execute`, 0);
+        }
+        return this.runLocal<T>(local, tool, args, { ...options, logicalCallId, recordId: decision.recordId });
       }
     }
     const envelope = await this.tools.invoke<T>(this.runId, tool, args, {
