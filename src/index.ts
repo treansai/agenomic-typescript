@@ -51,6 +51,25 @@ export {
   type TurnToolSpec,
 } from "./benchmarks";
 export {
+  ToolCallError,
+  ToolExecutionError,
+  ToolRouter,
+  ToolsResource,
+  TOOL_EXECUTION_SCHEMA_VERSION,
+  type CreateToolRunOptions,
+  type InvokeOptions,
+  type ToolBindingMode,
+  type ToolCallEnvelope,
+  type ToolCallResult,
+  type ToolInvocationStatus,
+  type ToolExecutionConfigInput,
+  type ToolExecutionMode,
+  type ToolExternalState,
+  type ToolProvenance,
+  type ToolResultSource,
+  type ToolRouterOptions,
+} from "./tools";
+export {
   TrackingResource,
   TrackingSession,
   type TrackingStartOptions,

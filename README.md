@@ -215,6 +215,39 @@ const run = traceAgentRun(
 
 `recordMCPToolCall()` uses the active async trace context when called inside `traceAgentRun()` or `withTracedRoute()`.
 
+## Tool Execution for Replays
+
+`client.tools` routes each tool call of a replay through the Agenomic Tool
+Gateway. The cloud answers with the real backend (secrets resolved server-side
+from `${env:VAR_NAME}` references) or with the Tool Mock Engine, per tool and
+by explicit configuration. There is no implicit fallback to a real call.
+
+```ts
+import { AgenomicClient, ToolCallError } from "@agenomic/sdk";
+
+const client = new AgenomicClient({ apiKey: "agm_...", baseUrl: "https://cloud.example" });
+const configText = await fs.readFile("tool_execution.yaml", "utf8");
+let run = await client.tools.createRun({ name: "hybrid", configText, repetitions: 3 });
+if (run.status === "planned") run = await client.tools.approveRun(String(run.id), String(run.plan_hash));
+await client.tools.startRun(String(run.id));
+
+const router = client.tools.router(String(run.id), { repetition: 1 });
+const customer = await router.call<{ tier: string }>("crm.get_customer", { id: "c_1" });
+try {
+  await router.call("email.send", { to: "ops@example.test" });
+} catch (error) {
+  if (error instanceof ToolCallError) console.log(error.code, error.envelope.agenomic.provenance);
+}
+console.log(router.summary()); // { calls, bySource, hasRealCalls, unreported }
+```
+
+Functions passed as `localFunctions` never run before the gateway allows
+them: the router calls `local/authorize` first (budget reserved, pending
+record), executes only on a `local` decision, routes the call through the
+gateway when the run binds the tool to a mock, and settles the record with
+`report-local`. If the report fails, the call stays in `router.calls` with
+`reported: false` and `external_state: "indeterminate"`.
+
 ## OpenAI Wrapper Placeholder
 
 `instrumentOpenAI()` does not require the OpenAI SDK as a dependency. Pass any client-like object exposing `responses.create()` or `chat.completions.create()` and the wrapper will record basic `model_call` events when a trace is active.
