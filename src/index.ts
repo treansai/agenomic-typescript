@@ -30,6 +30,27 @@ export {
   type WireMonitorEvent,
 } from "./rmp";
 export {
+  BenchmarksResource,
+  BridgeServer,
+  BENCHMARKS_SPEC_VERSION,
+  type AgentTargetBridge,
+  type BenchmarkCatalogEntry,
+  type BenchmarkPlan,
+  type BenchmarkPlanView,
+  type BenchmarkRun,
+  type BenchmarkRunDetail,
+  type BenchmarkSelection,
+  type BridgeCapability,
+  type BridgeServeOptions,
+  type LaunchOutcome,
+  type PolicyProposal,
+  type TurnMessage,
+  type TurnReply,
+  type TurnRequest,
+  type TurnToolCall,
+  type TurnToolSpec,
+} from "./benchmarks";
+export {
   ToolCallError,
   ToolExecutionError,
   ToolRouter,

@@ -13,6 +13,7 @@ import {
   ReviewResource,
   RmpResource,
 } from "./rmp";
+import { BenchmarksResource } from "./benchmarks";
 import { ToolsResource } from "./tools";
 import { TrackingResource } from "./tracking";
 import { TraceBuilder } from "./tracing";
@@ -34,6 +35,8 @@ export class AgenomicClient {
   readonly monitor: MonitorResource;
   /** Alerts, action plans, recommendations, and routing. */
   readonly protect: ProtectResource;
+  /** RMP benchmarks (cloud only): catalogue, plans, launches, runs, policies. */
+  readonly benchmarks: BenchmarksResource;
   /** Replay tool execution: Tool Gateway (real calls) and Tool Mock Engine. */
   readonly tools: ToolsResource;
 
@@ -48,6 +51,7 @@ export class AgenomicClient {
     this.review = new ReviewResource(this);
     this.monitor = new MonitorResource(this);
     this.protect = new ProtectResource(this);
+    this.benchmarks = new BenchmarksResource(this);
     this.tools = new ToolsResource(this);
   }
 
