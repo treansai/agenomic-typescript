@@ -480,17 +480,22 @@ export class BridgeServer {
   async serve(): Promise<number> {
     await this.register();
     let idleSince = Date.now();
-    while (!this.stopped) {
-      const handled = await this.pollOnce();
-      const now = Date.now();
-      if (handled) {
-        idleSince = now;
-        if (this.options.maxTurns !== undefined && this.turnsAnswered >= this.options.maxTurns) break;
-      } else if (this.options.idleTimeoutMs !== undefined && now - idleSince >= this.options.idleTimeoutMs) {
-        break;
+    try {
+      while (!this.stopped) {
+        const handled = await this.pollOnce();
+        const now = Date.now();
+        if (handled) {
+          idleSince = now;
+          if (this.options.maxTurns !== undefined && this.turnsAnswered >= this.options.maxTurns) break;
+        } else if (this.options.idleTimeoutMs !== undefined && now - idleSince >= this.options.idleTimeoutMs) {
+          break;
+        }
       }
+    } finally {
+      const trial = this.currentTrial;
+      this.currentTrial = null;
+      if (trial !== null) await this.bridge.endTrial?.(trial);
     }
-    if (this.currentTrial !== null) await this.bridge.endTrial?.(this.currentTrial);
     return this.turnsAnswered;
   }
 

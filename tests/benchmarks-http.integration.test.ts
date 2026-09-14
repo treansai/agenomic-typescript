@@ -145,10 +145,12 @@ describe("benchmarks integration over real HTTP with a scripted gateway", () => 
       { method: "GET", path: NEXT, response: { turn: wireTurn("turn_1", "trial_1", 0) } },
       { method: "POST", path: "/v1/rmp/benchmarks/bridge/turns/turn_1/reply", status: 409, body: WIRE_REPLY },
     ];
+    const events: string[] = [];
     await withHttpGateway(exchanges, async (baseUrl) => {
-      const server = bridgeServer(baseUrl, recordingBridge([]), { maxTurns: 1 });
+      const server = bridgeServer(baseUrl, recordingBridge(events), { maxTurns: 1 });
       await expect(server.serve()).rejects.toThrow("409");
       expect(server.turnsAnswered).toBe(0);
+      expect(events).toEqual(["start:trial_1", "handle:turn_1", "end:trial_1"]);
     });
   });
 
