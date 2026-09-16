@@ -694,7 +694,7 @@ export class MonitorResource {
 
 /** The `client.protect` namespace. Local-mode reads never throw. */
 export class ProtectResource {
-  constructor(private readonly client: AgenomicClient) {}
+  constructor(protected readonly client: AgenomicClient) {}
 
   /** List alerts for a session. Local mode returns `[]`. */
   async alerts(options: { sessionId: string }): Promise<Alert[]> {

@@ -9,11 +9,11 @@ import { TraceEnvelopeSchema } from "./schemas";
 import { ModelsResource } from "./models-resource";
 import {
   MonitorResource,
-  ProtectResource,
   ReviewResource,
   RmpResource,
 } from "./rmp";
 import { BenchmarksResource } from "./benchmarks";
+import { ProtectResource } from "./protect";
 import { ToolsResource } from "./tools";
 import { TrackingResource } from "./tracking";
 import { TraceBuilder } from "./tracing";
@@ -33,7 +33,7 @@ export class AgenomicClient {
   readonly review: ReviewResource;
   /** Runtime detection sessions and findings. */
   readonly monitor: MonitorResource;
-  /** Alerts, action plans, recommendations, and routing. */
+  /** Alerts, action plans, recommendations, routing, and proactive policy enforcement. */
   readonly protect: ProtectResource;
   /** RMP benchmarks (cloud only): catalogue, plans, launches, runs, policies. */
   readonly benchmarks: BenchmarksResource;

@@ -1,16 +1,45 @@
 import type { ModelCallDraft } from "../models";
+import type { ProtectOverlay } from "../protect";
 import { getCurrentTrace, type TraceBuilder } from "../tracing";
 import { diffMilliseconds, normalizeError, nowIso } from "../utils";
 
 type AnyAsyncFunction = (...args: any[]) => Promise<any>;
 
+export type OpenAIRequestKind = "chat" | "responses";
+
 export interface OpenAIInstrumentationOptions {
   trace?: TraceBuilder;
   provider?: string;
+  /** Protect instruction overlay injected first, deterministically and idempotently, in the pre call window. */
+  overlay?: string | ProtectOverlay;
 }
 
 function resolveTrace(trace?: TraceBuilder): TraceBuilder | undefined {
   return trace ?? getCurrentTrace();
+}
+
+function overlayText(overlay: string | ProtectOverlay | undefined): string | undefined {
+  const text = typeof overlay === "string" ? overlay : overlay?.text;
+  return text && text.length > 0 ? text : undefined;
+}
+
+/** Pure request transform: returns a new request carrying the overlay, or the same one when already present. */
+export function applyOverlay(
+  kind: OpenAIRequestKind,
+  request: Record<string, unknown>,
+  overlay: string | ProtectOverlay | undefined,
+): Record<string, unknown> {
+  const text = overlayText(overlay);
+  if (text === undefined) return request;
+  if (kind === "chat") {
+    const messages = Array.isArray(request.messages) ? (request.messages as unknown[]) : [];
+    const first = messages[0] as { role?: unknown; content?: unknown } | undefined;
+    if (first?.role === "system" && first.content === text) return request;
+    return { ...request, messages: [{ role: "system", content: text }, ...messages] };
+  }
+  const instructions = typeof request.instructions === "string" ? request.instructions : "";
+  if (instructions === text || instructions.startsWith(`${text}\n\n`)) return request;
+  return { ...request, instructions: instructions.length > 0 ? `${text}\n\n${instructions}` : text };
 }
 
 function toModelCall(
@@ -35,6 +64,12 @@ function toModelCall(
         | { message?: { content?: unknown } }
         | undefined)
     : undefined;
+  const input =
+    "input" in request
+      ? typeof request.instructions === "string"
+        ? { instructions: request.instructions, input: request.input }
+        : request.input
+      : request.messages ?? request.prompt;
 
   return {
     type: "model_call",
@@ -43,7 +78,7 @@ function toModelCall(
       typeof request.model === "string" && request.model.length > 0
         ? request.model
         : "unknown",
-    input: "input" in request ? request.input : request.messages ?? request.prompt,
+    input,
     output:
       response.output_text ??
       response.output ??
@@ -65,15 +100,18 @@ function toModelCall(
 
 function wrapCreateMethod(
   fn: AnyAsyncFunction,
+  kind: OpenAIRequestKind,
   options: OpenAIInstrumentationOptions,
 ): AnyAsyncFunction {
   return async (...args: unknown[]) => {
     const trace = resolveTrace(options.trace);
-    const request = ((args[0] as Record<string, unknown> | undefined) ?? {});
+    const original = ((args[0] as Record<string, unknown> | undefined) ?? {});
+    const request = applyOverlay(kind, original, options.overlay);
+    const forwarded = request === original ? args : [request, ...args.slice(1)];
     const startedAt = nowIso();
 
     try {
-      const response = await fn(...args);
+      const response = await fn(...forwarded);
       const endedAt = nowIso();
 
       if (trace) {
@@ -120,6 +158,7 @@ export function instrumentOpenAI<T extends Record<string, any>>(
       ...client.responses,
       create: wrapCreateMethod(
         client.responses.create.bind(client.responses),
+        "responses",
         options,
       ),
     };
@@ -132,6 +171,7 @@ export function instrumentOpenAI<T extends Record<string, any>>(
         ...client.chat.completions,
         create: wrapCreateMethod(
           client.chat.completions.create.bind(client.chat.completions),
+          "chat",
           options,
         ),
       },

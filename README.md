@@ -248,6 +248,65 @@ gateway when the run binds the tool to a mock, and settles the record with
 `report-local`. If the report fails, the call stays in `router.calls` with
 `reported: false` and `external_state: "indeterminate"`.
 
+## Protect: Proactive Policy Enforcement
+
+On a protect run (a tool execution config carrying a `protect` block) the
+gateway admits every call against the released policies bound to the org,
+environment, agent, tool contract or run before anything executes. The
+router surfaces the three admission outcomes as typed errors; nothing runs
+locally until the gateway says `local` and hands over a signed permit.
+
+```ts
+import { ToolApprovalPending, ToolCallDenied } from "@agenomic/sdk";
+
+const router = client.tools.router(runId, {
+  localFunctions: { "crm.update_customer": updateCustomer },
+  beforeAction: (intent) => audit.log(intent), // may throw to abort locally, never approves
+});
+
+try {
+  await router.call("crm.update_customer", { id: "c_42", fields: { credit_limit: 50000 } });
+} catch (error) {
+  if (error instanceof ToolApprovalPending) {
+    // HTTP 202: a reviewer must decide. Poll and re-issue the same call once approved.
+    await router.resume(error, { pollIntervalMs: 2000, timeoutMs: 900_000 });
+  } else if (error instanceof ToolCallDenied) {
+    // HTTP 403: error.code is policy_denied (or the approval status on resume),
+    // error.decision carries reason_codes, error.transformation a redaction proposal.
+  }
+}
+```
+
+- `ToolCallResult.result` is `null` for pending and denied calls; both are
+  appended to `router.calls` with `status: "pending" | "denied"`.
+- Unknown decision strings from `local/authorize` are treated as denied.
+- `resume` re-issues the identical call identity exactly once, with the
+  original `Idempotency-Key`, when the approval is `approved` or `consumed`;
+  a `consumed` approval already executed, so the replay recovers its stored
+  result and a 409 answer throws `ToolExecutionError` with `code` `conflict`.
+- `resume` throws `ToolCallDenied` with `code` `rejected`, `expired` or any
+  other terminal status, and `ToolExecutionError("approval_timeout")` when
+  the approval is still pending after `timeoutMs`.
+- The permit returned by `local/authorize` is forwarded verbatim to
+  `report-local`.
+
+`client.protect` adds `overlay(runId)`, `catalog(runId)`, `approvals`,
+`decisions`, `policies`, `bindings`, `restrictions`, `killSwitch`,
+`simulate`, `coverage` and `metricsSummary` over `/v1/protect/*` and
+`/v1/policies/*`; server refusals surface as `ToolExecutionError` with the
+server `code`. The RMP alert methods keep working.
+
+```ts
+const overlay = await client.protect.overlay(runId);
+const openai = instrumentOpenAI(new OpenAI(), { overlay });
+```
+
+With an `overlay` (string or `ProtectOverlay`) the wrapper prepends a system
+message to `chat.completions.create` requests and sets or prefixes
+`instructions` on `responses.create` requests, deterministically and
+idempotently, before the call leaves the process; the recorded `model_call`
+input is the injected request.
+
 ## OpenAI Wrapper Placeholder
 
 `instrumentOpenAI()` does not require the OpenAI SDK as a dependency. Pass any client-like object exposing `responses.create()` or `chat.completions.create()` and the wrapper will record basic `model_call` events when a trace is active.

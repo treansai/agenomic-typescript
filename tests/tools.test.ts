@@ -76,7 +76,7 @@ describe("tools (cloud mode)", () => {
     const tools = cloud().tools;
     const first = await tools.invoke<{ customer: { id: string } }>(RUN, "crm.get_customer", { id: "c_1" }, { logicalCallId: "c1" });
     await tools.invoke(RUN, "crm.get_customer", { id: "c_1" }, { logicalCallId: "c1", attempt: 2 });
-    expect(first.result.customer.id).toBe("c_1");
+    expect(first.result?.customer.id).toBe("c_1");
     expect(first.agenomic.provenance.source).toBe("live");
     expect(calls[0]!).toMatchObject({
       method: "POST",
