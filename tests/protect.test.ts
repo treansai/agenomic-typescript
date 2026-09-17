@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgenomicClient } from "../src/client";
-import { ToolApprovalPending, ToolCallDenied, ToolExecutionError } from "../src/tools";
+import { requestJson, ToolApprovalPending, ToolCallDenied, ToolExecutionError } from "../src/tools";
 
 const RUN = "11111111-2222-4333-8444-555555555555";
 const APPROVAL = "aaaaaaaa-0000-4000-8000-000000000001";
@@ -417,5 +417,61 @@ describe("client.protect resources", () => {
     expect(await cloud().protect.alerts({ sessionId: "rmp_1" })).toEqual([{ alert_id: "al_1" }]);
     expect(calls[0]!.url).toBe(`${BASE}/v1/protect/alerts?session_id=rmp_1`);
     await expect(new AgenomicClient().protect.alerts({ sessionId: "rmp_1" })).resolves.toEqual([]);
+  });
+});
+
+describe("Codex review on #9", () => {
+  const pendingBody = envelope("pending", { protect: protect("require_approval", { approval_id: APPROVAL }), approval_id: APPROVAL, decision: "require_approval" });
+
+  it("resume replays the arguments as they were approved, not as the caller later mutated them", async () => {
+    const calls = stubFetch((url) => {
+      if (url.includes("/approvals/")) return { body: { id: APPROVAL, status: "approved" } };
+      if (calls.length === 1) return { status: 202, body: pendingBody };
+      return { body: envelope("success", {}, { ok: 1 }) };
+    });
+    const router = cloud().tools.router(RUN);
+    const args = { id: "c_1", fields: { credit_limit: 5 } };
+    await router.call("crm.update_customer", args).catch(() => undefined);
+    args.id = "c_2";
+    (args.fields as { credit_limit: number }).credit_limit = 500_000;
+    await router.resume(APPROVAL, { pollIntervalMs: 0 });
+    const invokes = calls.filter((c) => c.url.endsWith("/invoke"));
+    expect(invokes).toHaveLength(2);
+    expect(invokes[1]!.body).toEqual(invokes[0]!.body);
+    expect((invokes[1]!.body as { arguments: Record<string, unknown> }).arguments).toEqual({ id: "c_1", fields: { credit_limit: 5 } });
+  });
+
+  it("a second concurrent resume of the same approval is refused instead of re-issuing the call", async () => {
+    const calls = stubFetch((url) => {
+      if (url.includes("/approvals/")) return { body: { id: APPROVAL, status: "approved" } };
+      if (calls.length === 1) return { status: 202, body: { decision: "pending", record_id: "rec_local", approval_id: APPROVAL, protect: protect("require_approval", { approval_id: APPROVAL }) } };
+      if (url.endsWith("/local/authorize")) return { body: { decision: "local", record_id: "rec_local" } };
+      return { body: { record_id: "rec_local" } };
+    });
+    let executions = 0;
+    const router = cloud().tools.router(RUN, { localFunctions: { "crm.update_customer": () => ++executions } });
+    await router.call("crm.update_customer", { id: "c_1" }).catch(() => undefined);
+    const first = router.resume(APPROVAL, { pollIntervalMs: 0 });
+    const second = await router.resume(APPROVAL, { pollIntervalMs: 0 }).catch((e: unknown) => e);
+    await first.catch(() => undefined);
+    expect(second).toBeInstanceOf(ToolExecutionError);
+    expect(second).toMatchObject({ code: "resume_in_flight" });
+    expect(executions).toBe(1);
+  });
+
+  it("an empty 2xx body stays an invalid response", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("", { status: 200 }));
+    const error = await requestJson(cloud(), "GET", "/v1/tool-execution/runs").catch((e: unknown) => e);
+    expect(error).toMatchObject({ name: "ToolExecutionError", code: "invalid_response" });
+  });
+
+  it("a 403 carrying a non-string decision is a denial, not a transport error", async () => {
+    const effects: string[] = [];
+    stubFetch(() => ({ status: 403, body: { decision: null, record_id: "rec_local" } }));
+    const router = cloud().tools.router(RUN, { localFunctions: { "crm.update_customer": () => effects.push("ran") } });
+    const error = await router.call("crm.update_customer").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ToolCallDenied);
+    expect(effects).toEqual([]);
+    expect(router.calls[0]!.agenomic.status).toBe("denied");
   });
 });

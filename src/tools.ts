@@ -248,7 +248,7 @@ export async function fetchJson(
   }
   let parsed: Record<string, unknown> | undefined;
   try {
-    const value: unknown = text ? JSON.parse(text) : {};
+    const value: unknown = text ? JSON.parse(text) : undefined;
     parsed = value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
   } catch {
     parsed = undefined;
@@ -524,7 +524,7 @@ export class ToolsResource {
       arguments: args,
       ...(options.parentCallId ? { parent_call_id: options.parentCallId } : {}),
     });
-    if (exchange.status === 403 && exchange.body && (typeof exchange.body.decision === "string" || exchange.body.protect !== undefined)) {
+    if (exchange.status === 403 && exchange.body && ("decision" in exchange.body || exchange.body.protect !== undefined)) {
       return { decision: "denied", ...readDecision(exchange.body) };
     }
     const res = acceptJson("POST", path, exchange);
@@ -586,6 +586,14 @@ interface PendingIdentity {
   options: RouterCallOptions & { logicalCallId: string };
 }
 
+function snapshotArgs(args: Record<string, unknown>): Record<string, unknown> {
+  try {
+    return structuredClone(args);
+  } catch {
+    return JSON.parse(JSON.stringify(args)) as Record<string, unknown>;
+  }
+}
+
 function admissionEnvelope(status: "pending" | "denied", recordId: string, authorization: LocalAuthorization): ToolCallResult {
   return {
     result: null,
@@ -613,6 +621,7 @@ export class ToolRouter {
   readonly calls: ToolCallResult[] = [];
   private sequence = 0;
   private readonly pending = new Map<string, PendingIdentity>();
+  private readonly resuming = new Set<string>();
 
   constructor(
     private readonly tools: ToolsResource,
@@ -628,7 +637,7 @@ export class ToolRouter {
   private pendingError(tool: string, envelope: ToolCallResult, identity: PendingIdentity): ToolApprovalPending {
     const approvalId = envelope.agenomic.approval_id ?? envelope.agenomic.protect?.approval_id ?? "";
     this.calls.push(envelope);
-    if (approvalId) this.pending.set(approvalId, identity);
+    if (approvalId) this.pending.set(approvalId, { ...identity, args: snapshotArgs(identity.args) });
     return new ToolApprovalPending(tool, approvalId, envelope.agenomic.record_id, envelope);
   }
 
@@ -710,6 +719,23 @@ export class ToolRouter {
     if (!identity) {
       throw new ToolExecutionError("unknown_approval", `no pending call is registered for approval ${approvalId}`, 0);
     }
+    if (this.resuming.has(approvalId)) {
+      throw new ToolExecutionError("resume_in_flight", `approval ${approvalId} is already being resumed by this router`, 0);
+    }
+    this.resuming.add(approvalId);
+    try {
+      return await this.awaitAndReissue<T>(approvalId, approval, identity, opts);
+    } finally {
+      this.resuming.delete(approvalId);
+    }
+  }
+
+  private async awaitAndReissue<T>(
+    approvalId: string,
+    approval: ToolApprovalPending | string,
+    identity: PendingIdentity,
+    opts: ResumeOptions,
+  ): Promise<T> {
     const pollIntervalMs = opts.pollIntervalMs ?? 2000;
     const timeoutMs = opts.timeoutMs ?? 900_000;
     const started = Date.now();
