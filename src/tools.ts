@@ -4,6 +4,8 @@
 // server-side credentials) or to the Tool Mock Engine according to the run's
 // explicit per-tool bindings. Nothing here ever falls back to a real call.
 
+import { randomUUID } from "node:crypto";
+
 import type { AgenomicClient } from "./client";
 
 export const TOOL_EXECUTION_SCHEMA_VERSION = "agenomic.tool_execution/v1";
@@ -467,7 +469,7 @@ export class ToolsResource {
     options: InvokeOptions = {},
   ): Promise<ToolCallResult<T>> {
     const repetition = options.repetition ?? 1;
-    const logicalCallId = options.logicalCallId ?? `call_${crypto.randomUUID().replace(/-/g, "")}`;
+    const logicalCallId = options.logicalCallId ?? `call_${randomUUID().replace(/-/g, "")}`;
     const path = `/v1/tool-execution/runs/${runId}/invoke`;
     const headers: Record<string, string> = {
       "idempotency-key": await stableKey([runId, String(repetition), logicalCallId]),
