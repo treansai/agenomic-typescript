@@ -19,8 +19,35 @@ export type ToolResultSource =
   | "plugin"
   | "runtime_local"
   | "unrouted";
-export type ToolInvocationStatus = "success" | "error" | "aborted" | "timeout" | "pending";
+export type ToolInvocationStatus = "success" | "error" | "aborted" | "timeout" | "pending" | "denied";
 export type ToolExternalState = "none" | "confirmed" | "indeterminate";
+export type ProtectOutcome = "allow" | "deny" | "require_approval" | "pause" | "transform_proposal";
+export type ProtectEffectiveMode = "enforce" | "shadow";
+
+/** Admission stamp on an invocation (mirror of `InvocationDecision`). */
+export interface ProtectDecision {
+  decision_id: string;
+  outcome: ProtectOutcome;
+  effective_mode: ProtectEffectiveMode;
+  reason_codes: string[];
+  approval_id?: string;
+  permit_ref?: string;
+  policy_snapshot_digest: string;
+  evaluated_at: string;
+}
+
+export interface TransformationProposal {
+  kind: string;
+  fields?: string[];
+  proposed_arguments_hash?: string;
+  note?: string;
+}
+
+/** Signed runtime-local permit; opaque to the SDK and forwarded verbatim. */
+export interface SignedPermit {
+  document: Record<string, unknown>;
+  signature: Record<string, unknown>;
+}
 
 export interface ToolProvenance {
   source: ToolResultSource;
@@ -46,11 +73,16 @@ export interface ToolCallEnvelope {
   expected_error: boolean;
   /** False when a local function ran but its report never reached the gateway. */
   reported?: boolean;
+  protect?: ProtectDecision;
+  approval_id?: string;
+  decision?: string;
+  transformation?: TransformationProposal;
+  safe_explanation?: string;
 }
 
-/** Native tool result plus the Agenomic technical envelope. */
+/** Native tool result plus the Agenomic technical envelope; `result` is null when denied or pending. */
 export interface ToolCallResult<T = unknown> {
-  result: T;
+  result: T | null;
   agenomic: ToolCallEnvelope;
 }
 
@@ -72,6 +104,28 @@ export interface InvokeOptions {
   attempt?: number;
   parentCallId?: string;
   deadlineMs?: number;
+}
+
+export type LocalAuthorizationDecision = "local" | "gateway" | "pending" | "denied";
+
+export interface LocalAuthorization {
+  decision: LocalAuthorizationDecision;
+  recordId?: string;
+  approvalId?: string;
+  permit?: SignedPermit;
+  protect?: ProtectDecision;
+}
+
+/** The call identity handed to `beforeAction` before any request leaves the process. */
+export interface ToolActionIntent {
+  runId: string;
+  tool: string;
+  arguments: Record<string, unknown>;
+  logicalCallId: string;
+  repetition: number;
+  attempt: number;
+  parentCallId?: string;
+  executionPoint: "runtime_local" | "gateway";
 }
 
 /** A tool-execution API call was refused; `code` is the server error code. */
@@ -102,10 +156,146 @@ export class ToolCallError extends Error {
   }
 }
 
+/** Admission refused the call (403 `policy_denied`, transform proposal, rejected or expired approval); nothing ran. */
+export class ToolCallDenied extends ToolExecutionError {
+  constructor(
+    readonly tool: string,
+    readonly envelope: ToolCallResult,
+    code = "policy_denied",
+    status = 403,
+  ) {
+    const agenomic = envelope.agenomic;
+    const reasons = agenomic.protect?.reason_codes?.join(",") ?? "";
+    super(code, agenomic.safe_explanation ?? `tool ${tool} denied${reasons ? ` (${reasons})` : ""}`, status);
+    this.name = "ToolCallDenied";
+  }
+
+  get decision(): ProtectDecision | undefined {
+    return this.envelope.agenomic.protect;
+  }
+
+  get transformation(): TransformationProposal | undefined {
+    return this.envelope.agenomic.transformation;
+  }
+}
+
+/** Admission requires a human approval (HTTP 202); resume with `router.resume`. */
+export class ToolApprovalPending extends ToolExecutionError {
+  constructor(
+    readonly tool: string,
+    readonly approvalId: string,
+    readonly recordId: string,
+    readonly envelope: ToolCallResult,
+  ) {
+    super("approval_pending", `tool ${tool} awaits approval ${approvalId}`, 202);
+    this.name = "ToolApprovalPending";
+  }
+
+  get decision(): ProtectDecision | undefined {
+    return this.envelope.agenomic.protect;
+  }
+}
+
 function apiBase(client: AgenomicClient): string | undefined {
   const raw = client.baseUrl ?? client.endpoint;
   if (!raw) return undefined;
   return raw.replace(/\/+$/, "").replace(/\/v1\/traces$/, "");
+}
+
+export type JsonMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+export interface JsonExchange {
+  status: number;
+  body: Record<string, unknown> | undefined;
+}
+
+/** One HTTP exchange against the API root; only transport faults throw. */
+export async function fetchJson(
+  client: AgenomicClient,
+  method: JsonMethod,
+  path: string,
+  body?: unknown,
+  extraHeaders: Record<string, string> = {},
+): Promise<JsonExchange> {
+  const base = apiBase(client);
+  if (!base) {
+    throw new ToolExecutionError(
+      "cloud_required",
+      "this call requires a baseUrl on the client; there is no local fallback",
+      0,
+    );
+  }
+  let response: Response;
+  try {
+    response = await fetch(base + path, {
+      method,
+      headers: {
+        ...(body !== undefined ? { "content-type": "application/json" } : {}),
+        ...(client.apiKey ? { authorization: `Bearer ${client.apiKey}` } : {}),
+        ...client.headers,
+        ...extraHeaders,
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+  } catch (error) {
+    throw new ToolExecutionError("transport_error", `${method} ${path} failed: ${String(error)}`, 0);
+  }
+  let text: string;
+  try {
+    text = await response.text();
+  } catch (error) {
+    throw new ToolExecutionError("transport_error", `${method} ${path} body read failed: ${String(error)}`, response.status);
+  }
+  let parsed: Record<string, unknown> | undefined;
+  try {
+    const value: unknown = text ? JSON.parse(text) : undefined;
+    parsed = value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  } catch {
+    parsed = undefined;
+  }
+  return { status: response.status, body: parsed };
+}
+
+/** Turns a non-2xx `{ error: { code, message } }` or a non-JSON body into a typed error. */
+export function acceptJson(method: JsonMethod, path: string, exchange: JsonExchange): Record<string, unknown> {
+  if (exchange.status < 200 || exchange.status >= 300) {
+    const error = (exchange.body?.error ?? {}) as { code?: string; message?: string };
+    throw new ToolExecutionError(
+      error.code ?? "http_error",
+      error.message ?? `${method} ${path} returned ${exchange.status}`,
+      exchange.status,
+    );
+  }
+  if (exchange.body === undefined) {
+    throw new ToolExecutionError("invalid_response", `${method} ${path} returned a non-JSON body`, exchange.status);
+  }
+  return exchange.body;
+}
+
+export async function requestJson(
+  client: AgenomicClient,
+  method: JsonMethod,
+  path: string,
+  body?: unknown,
+  extraHeaders: Record<string, string> = {},
+): Promise<Record<string, unknown>> {
+  return acceptJson(method, path, await fetchJson(client, method, path, body, extraHeaders));
+}
+
+function readEnvelope(body: Record<string, unknown> | undefined): ToolCallEnvelope | undefined {
+  const envelope = body?.agenomic as ToolCallEnvelope | undefined;
+  return envelope && typeof envelope.record_id === "string" ? envelope : undefined;
+}
+
+function readDecision(body: Record<string, unknown>): Omit<LocalAuthorization, "decision"> {
+  const permit = body.permit;
+  const protect = body.protect;
+  return {
+    ...(body.record_id !== undefined ? { recordId: String(body.record_id) } : {}),
+    ...(body.approval_id !== undefined ? { approvalId: String(body.approval_id) } : {}),
+    ...(permit !== null && typeof permit === "object" ? { permit: permit as SignedPermit } : {}),
+    ...(protect !== null && typeof protect === "object" ? { protect: protect as ProtectDecision } : {}),
+  };
 }
 
 function configBody(input: ToolExecutionConfigInput): Record<string, unknown> {
@@ -133,62 +323,15 @@ async function stableKey(parts: string[]): Promise<string> {
 export class ToolsResource {
   readonly schemaVersion = TOOL_EXECUTION_SCHEMA_VERSION;
 
-  constructor(private readonly client: AgenomicClient) {}
+  constructor(readonly client: AgenomicClient) {}
 
-  private async request(
-    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
+  private request(
+    method: JsonMethod,
     path: string,
     body?: unknown,
     extraHeaders: Record<string, string> = {},
   ): Promise<Record<string, unknown>> {
-    const base = apiBase(this.client);
-    if (!base) {
-      throw new ToolExecutionError(
-        "cloud_required",
-        "tool execution requires a baseUrl on the client; there is no local fallback",
-        0,
-      );
-    }
-    let response: Response;
-    try {
-      response = await fetch(base + path, {
-        method,
-        headers: {
-          ...(body !== undefined ? { "content-type": "application/json" } : {}),
-          ...(this.client.apiKey ? { authorization: `Bearer ${this.client.apiKey}` } : {}),
-          ...this.client.headers,
-          ...extraHeaders,
-        },
-        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      });
-    } catch (error) {
-      throw new ToolExecutionError("transport_error", `${method} ${path} failed: ${String(error)}`, 0);
-    }
-    let text: string;
-    try {
-      text = await response.text();
-    } catch (error) {
-      throw new ToolExecutionError("transport_error", `${method} ${path} body read failed: ${String(error)}`, response.status);
-    }
-    let parsed: Record<string, unknown> | undefined;
-    try {
-      const value: unknown = text ? JSON.parse(text) : {};
-      parsed = value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
-    } catch {
-      parsed = undefined;
-    }
-    if (!response.ok) {
-      const error = (parsed?.error ?? {}) as { code?: string; message?: string };
-      throw new ToolExecutionError(
-        error.code ?? "http_error",
-        error.message ?? `${method} ${path} returned ${response.status}`,
-        response.status,
-      );
-    }
-    if (parsed === undefined) {
-      throw new ToolExecutionError("invalid_response", `${method} ${path} returned a non-JSON body`, response.status);
-    }
-    return parsed;
+    return requestJson(this.client, method, path, body, extraHeaders);
   }
 
   async createProfile(options: { name: string; environment?: string; allowedEnv?: string[] }) {
@@ -325,10 +468,14 @@ export class ToolsResource {
   ): Promise<ToolCallResult<T>> {
     const repetition = options.repetition ?? 1;
     const logicalCallId = options.logicalCallId ?? `call_${crypto.randomUUID().replace(/-/g, "")}`;
-    const key = await stableKey([runId, String(repetition), logicalCallId]);
-    const res = await this.request(
+    const path = `/v1/tool-execution/runs/${runId}/invoke`;
+    const headers: Record<string, string> = {
+      "idempotency-key": await stableKey([runId, String(repetition), logicalCallId]),
+    };
+    const exchange = await fetchJson(
+      this.client,
       "POST",
-      `/v1/tool-execution/runs/${runId}/invoke`,
+      path,
       {
         repetition,
         logical_call_id: logicalCallId,
@@ -338,29 +485,38 @@ export class ToolsResource {
         ...(options.parentCallId ? { parent_call_id: options.parentCallId } : {}),
         ...(options.deadlineMs !== undefined ? { deadline_ms: options.deadlineMs } : {}),
       },
-      { "idempotency-key": key },
+      headers,
     );
-    const envelope = res.agenomic as ToolCallEnvelope | undefined;
-    if (!envelope || typeof envelope.record_id !== "string") {
+    if (exchange.status === 403) {
+      const denied = readEnvelope(exchange.body);
+      if (denied) throw new ToolCallDenied(tool, { result: null, agenomic: { ...denied, status: "denied" } });
+    }
+    const res = acceptJson("POST", path, exchange);
+    const envelope = readEnvelope(res);
+    if (!envelope) {
       throw new ToolExecutionError("invalid_response", "invoke response did not include an agenomic envelope", 0);
+    }
+    if (exchange.status === 202 || envelope.status === "pending") {
+      return { result: null, agenomic: { ...envelope, status: "pending" } };
     }
     return { result: res.result as T, agenomic: envelope };
   }
 
-  /** Record a call the runtime executed itself (local adapter). */
   /**
    * Ask the gateway whether a local function may run for this call. `local`
-   * reserves budget and records a pending invocation; `gateway` means the run
-   * binds the tool to a mock or a non-local adapter and `invoke` must be used.
-   * Refusals throw before anything executes.
+   * reserves budget, records a pending invocation and carries the permit;
+   * `gateway` means the run binds the tool to a mock or a non-local adapter and
+   * `invoke` must be used; `pending` awaits an approval; anything else is
+   * `denied`. Refusals never execute anything.
    */
   async authorizeLocal(
     runId: string,
     tool: string,
     args: Record<string, unknown>,
     options: InvokeOptions & { logicalCallId: string },
-  ): Promise<{ decision: "local" | "gateway"; recordId?: string }> {
-    const res = await this.request("POST", `/v1/tool-execution/runs/${runId}/local/authorize`, {
+  ): Promise<LocalAuthorization> {
+    const path = `/v1/tool-execution/runs/${runId}/local/authorize`;
+    const exchange = await fetchJson(this.client, "POST", path, {
       repetition: options.repetition ?? 1,
       logical_call_id: options.logicalCallId,
       attempt: options.attempt ?? 1,
@@ -368,19 +524,21 @@ export class ToolsResource {
       arguments: args,
       ...(options.parentCallId ? { parent_call_id: options.parentCallId } : {}),
     });
-    return {
-      decision: res.decision === "local" ? "local" : "gateway",
-      ...(res.record_id !== undefined ? { recordId: String(res.record_id) } : {}),
-    };
+    if (exchange.status === 403 && exchange.body && ("decision" in exchange.body || exchange.body.protect !== undefined)) {
+      return { decision: "denied", ...readDecision(exchange.body) };
+    }
+    const res = acceptJson("POST", path, exchange);
+    const decision = res.decision === "local" || res.decision === "gateway" || res.decision === "pending" ? res.decision : "denied";
+    return { decision, ...readDecision(res) };
   }
 
-  /** Settle a call previously accepted by `authorizeLocal`. */
+  /** Settle a call previously accepted by `authorizeLocal`, presenting its permit. */
   async reportLocal(
     runId: string,
     tool: string,
     args: Record<string, unknown>,
     result: unknown,
-    options: InvokeOptions & { logicalCallId: string; isError?: boolean; durationMs?: number },
+    options: InvokeOptions & { logicalCallId: string; isError?: boolean; durationMs?: number; permit?: SignedPermit },
   ): Promise<string> {
     const res = await this.request("POST", `/v1/tool-execution/runs/${runId}/report-local`, {
       repetition: options.repetition ?? 1,
@@ -392,6 +550,7 @@ export class ToolsResource {
       is_error: options.isError ?? false,
       duration_ms: options.durationMs ?? 0,
       ...(options.parentCallId ? { parent_call_id: options.parentCallId } : {}),
+      ...(options.permit ? { permit: options.permit } : {}),
     });
     return String(res.record_id ?? "");
   }
@@ -406,12 +565,63 @@ export interface ToolRouterOptions {
   /** Functions executed in this process and reported to the gateway. */
   localFunctions?: Record<string, (args: Record<string, unknown>) => unknown | Promise<unknown>>;
   raiseOnError?: boolean;
+  /** Awaited with the call identity before any request; may throw to abort locally, never approves. */
+  beforeAction?: (intent: ToolActionIntent) => void | Promise<void>;
+}
+
+export interface ResumeOptions {
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+}
+
+interface RouterCallOptions {
+  parentCallId?: string;
+  attempt?: number;
+  logicalCallId?: string;
+}
+
+interface PendingIdentity {
+  tool: string;
+  args: Record<string, unknown>;
+  options: RouterCallOptions & { logicalCallId: string };
+}
+
+function snapshotArgs(args: Record<string, unknown>): Record<string, unknown> {
+  try {
+    return structuredClone(args);
+  } catch {
+    return JSON.parse(JSON.stringify(args)) as Record<string, unknown>;
+  }
+}
+
+function admissionEnvelope(status: "pending" | "denied", recordId: string, authorization: LocalAuthorization): ToolCallResult {
+  return {
+    result: null,
+    agenomic: {
+      record_id: recordId,
+      status,
+      provenance: { source: "unrouted", fidelity: "contract_only", binding_mode: "live" },
+      external_state: "none",
+      effects: [],
+      duration_ms: 0,
+      expected_error: false,
+      ...(authorization.protect ? { protect: authorization.protect } : {}),
+      ...(authorization.approvalId ? { approval_id: authorization.approvalId } : {}),
+      decision: authorization.protect?.outcome ?? (status === "pending" ? "require_approval" : "deny"),
+    },
+  };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Lightweight runtime-side wrapper around one run. */
 export class ToolRouter {
   readonly calls: ToolCallResult[] = [];
   private sequence = 0;
+  private readonly pending = new Map<string, PendingIdentity>();
+  private readonly resuming = new Set<string>();
 
   constructor(
     private readonly tools: ToolsResource,
@@ -424,44 +634,148 @@ export class ToolRouter {
     return `${tool}#${this.sequence}`;
   }
 
-  async call<T = unknown>(
-    tool: string,
-    args: Record<string, unknown> = {},
-    options: { parentCallId?: string; attempt?: number; logicalCallId?: string } = {},
-  ): Promise<T> {
+  private pendingError(tool: string, envelope: ToolCallResult, identity: PendingIdentity): ToolApprovalPending {
+    const approvalId = envelope.agenomic.approval_id ?? envelope.agenomic.protect?.approval_id ?? "";
+    this.calls.push(envelope);
+    if (approvalId) this.pending.set(approvalId, { ...identity, args: snapshotArgs(identity.args) });
+    return new ToolApprovalPending(tool, approvalId, envelope.agenomic.record_id, envelope);
+  }
+
+  call<T = unknown>(tool: string, args: Record<string, unknown> = {}, options: RouterCallOptions = {}): Promise<T> {
+    return this.dispatch<T>(tool, args, options);
+  }
+
+  private async dispatch<T>(tool: string, args: Record<string, unknown>, options: RouterCallOptions): Promise<T> {
     const raise = this.options.raiseOnError ?? true;
     const logicalCallId = options.logicalCallId ?? this.nextCallId(tool);
+    const identity: PendingIdentity = { tool, args, options: { ...options, logicalCallId } };
     const local = this.options.localFunctions?.[tool];
+    await this.options.beforeAction?.({
+      runId: this.runId,
+      tool,
+      arguments: args,
+      logicalCallId,
+      repetition: this.options.repetition ?? 1,
+      attempt: options.attempt ?? 1,
+      ...(options.parentCallId ? { parentCallId: options.parentCallId } : {}),
+      executionPoint: local ? "runtime_local" : "gateway",
+    });
     if (local) {
-      const decision = await this.tools.authorizeLocal(this.runId, tool, args, {
+      const authorization = await this.tools.authorizeLocal(this.runId, tool, args, {
         logicalCallId,
         repetition: this.options.repetition,
         attempt: options.attempt,
         parentCallId: options.parentCallId,
       });
-      if (decision.decision === "local") {
-        if (!decision.recordId) {
+      if (authorization.decision === "local") {
+        if (!authorization.recordId) {
           throw new ToolExecutionError("invalid_response", `local/authorize accepted ${tool} without a record_id; refusing to execute`, 0);
         }
-        return this.runLocal<T>(local, tool, args, { ...options, logicalCallId, recordId: decision.recordId });
+        return this.runLocal<T>(local, tool, args, { ...options, logicalCallId, recordId: authorization.recordId, permit: authorization.permit });
+      }
+      if (authorization.decision === "pending") {
+        throw this.pendingError(tool, admissionEnvelope("pending", authorization.recordId ?? "", authorization), identity);
+      }
+      if (authorization.decision !== "gateway") {
+        const envelope = admissionEnvelope("denied", authorization.recordId ?? "", authorization);
+        this.calls.push(envelope);
+        throw new ToolCallDenied(tool, envelope);
       }
     }
-    const envelope = await this.tools.invoke<T>(this.runId, tool, args, {
-      logicalCallId,
-      repetition: this.options.repetition,
-      attempt: options.attempt,
-      parentCallId: options.parentCallId,
-    });
+    let envelope: ToolCallResult<T>;
+    try {
+      envelope = await this.tools.invoke<T>(this.runId, tool, args, {
+        logicalCallId,
+        repetition: this.options.repetition,
+        attempt: options.attempt,
+        parentCallId: options.parentCallId,
+      });
+    } catch (error) {
+      if (error instanceof ToolCallDenied) this.calls.push(error.envelope);
+      throw error;
+    }
+    if (envelope.agenomic.status === "pending") throw this.pendingError(tool, envelope, identity);
+    if (envelope.agenomic.status === "denied") {
+      this.calls.push(envelope);
+      throw new ToolCallDenied(tool, envelope);
+    }
     this.calls.push(envelope);
     if (raise && envelope.agenomic.status !== "success") throw new ToolCallError(tool, envelope);
-    return envelope.result;
+    return envelope.result as T;
+  }
+
+  /**
+   * Wait for the approval behind a pending call, then re-issue the identical
+   * call identity once, with the original `Idempotency-Key`. `approved` and
+   * `consumed` both re-issue: a consumed approval already executed, so the
+   * replay recovers its result, and a 409 on that replay throws
+   * `ToolExecutionError` with code `conflict`. Rejected, expired or any other
+   * terminal status throws `ToolCallDenied` with that status as `code`;
+   * waiting past `timeoutMs` throws `ToolExecutionError("approval_timeout")`.
+   */
+  async resume<T = unknown>(approval: ToolApprovalPending | string, opts: ResumeOptions = {}): Promise<T> {
+    const approvalId = typeof approval === "string" ? approval : approval.approvalId;
+    const identity = this.pending.get(approvalId);
+    if (!identity) {
+      throw new ToolExecutionError("unknown_approval", `no pending call is registered for approval ${approvalId}`, 0);
+    }
+    if (this.resuming.has(approvalId)) {
+      throw new ToolExecutionError("resume_in_flight", `approval ${approvalId} is already being resumed by this router`, 0);
+    }
+    this.resuming.add(approvalId);
+    try {
+      return await this.awaitAndReissue<T>(approvalId, approval, identity, opts);
+    } finally {
+      this.resuming.delete(approvalId);
+    }
+  }
+
+  private async awaitAndReissue<T>(
+    approvalId: string,
+    approval: ToolApprovalPending | string,
+    identity: PendingIdentity,
+    opts: ResumeOptions,
+  ): Promise<T> {
+    const pollIntervalMs = opts.pollIntervalMs ?? 2000;
+    const timeoutMs = opts.timeoutMs ?? 900_000;
+    const started = Date.now();
+    let consumed = false;
+    for (;;) {
+      const { status } = await this.tools.client.protect.approvals.get(approvalId);
+      if (status === "approved" || status === "consumed") {
+        consumed = status === "consumed";
+        break;
+      }
+      if (status !== "pending") {
+        this.pending.delete(approvalId);
+        const envelope = typeof approval === "string" ? admissionEnvelope("denied", "", { decision: "denied" }) : approval.envelope;
+        throw new ToolCallDenied(identity.tool, { ...envelope, agenomic: { ...envelope.agenomic, status: "denied" } }, status);
+      }
+      if (Date.now() - started >= timeoutMs) {
+        throw new ToolExecutionError("approval_timeout", `approval ${approvalId} still pending after ${timeoutMs}ms`, 0);
+      }
+      await sleep(pollIntervalMs);
+    }
+    this.pending.delete(approvalId);
+    try {
+      return await this.dispatch<T>(identity.tool, identity.args, identity.options);
+    } catch (error) {
+      if (consumed && error instanceof ToolExecutionError && error.status === 409) {
+        throw new ToolExecutionError(
+          "conflict",
+          `approval ${approvalId} is consumed and ${identity.tool} already executed; the gateway refused to replay its result`,
+          409,
+        );
+      }
+      throw error;
+    }
   }
 
   private async runLocal<T>(
     local: (args: Record<string, unknown>) => unknown | Promise<unknown>,
     tool: string,
     args: Record<string, unknown>,
-    options: { parentCallId?: string; attempt?: number; logicalCallId: string; recordId: string },
+    options: { parentCallId?: string; attempt?: number; logicalCallId: string; recordId: string; permit?: SignedPermit },
   ): Promise<T> {
     const raise = this.options.raiseOnError ?? true;
     const started = Date.now();
@@ -495,6 +809,7 @@ export class ToolRouter {
         repetition: this.options.repetition,
         attempt: options.attempt,
         parentCallId: options.parentCallId,
+        permit: options.permit,
       });
     } catch (error) {
       envelope.agenomic.reported = false;

@@ -116,3 +116,46 @@ const plan = await client.protect.actionPlan({ alertId: alerts[0]!.alert_id });
 const recs = await client.protect.recommendations({ sessionId: session.session_id });
 await client.protect.notify({ alertId: alerts[0]!.alert_id }); // route to channels
 ```
+
+### Proactive policy enforcement
+
+The same namespace exposes the Protect admission surface (cloud only; every
+method throws `ToolExecutionError("cloud_required")` without a `baseUrl`):
+
+```ts
+const overlay = await client.protect.overlay(runId);        // { version, digest, text, policies }
+const catalog = await client.protect.catalog(runId);        // { tools: [{ tool, allowed, requires_approval, effect }] }
+
+await client.protect.approvals.list({ status: "pending", runId });
+await client.protect.approvals.get(approvalId);
+await client.protect.approvals.decide(approvalId, { decision: "approve", comment: "ok" });
+
+await client.protect.decisions.list({ runId, outcome: "deny", limit: 50 });
+await client.protect.decisions.get(decisionId);
+
+await client.protect.policies.list();
+await client.protect.policies.register(policyDocument);       // bare policy document
+await client.protect.policies.get("crm-guardrails", "2.0.0");  // /v1/policies/crm-guardrails%402.0.0
+await client.protect.policies.release("crm-guardrails", "2.0.0");
+await client.protect.policies.deprecate("crm-guardrails", "2.0.0");
+await client.protect.policies.simulate("crm-guardrails", "2.0.0", intents);
+await client.protect.policies.diff("crm-guardrails", "2.0.0", "1.0.0");
+
+await client.protect.bindings.list({ scopeKind: "run", scopeRef: runId });
+await client.protect.bindings.create({ policyId: "crm-guardrails", version: "2.0.0", scopeKind: "org", mode: "enforce" });
+await client.protect.bindings.revoke(bindingId, "rotated");
+
+await client.protect.restrictions.list({ status: "active" });
+await client.protect.restrictions.create({ scopeKind: "tool", scopeRef: "email.send", kind: "block_tool", reason: "incident" });
+await client.protect.restrictions.lift(restrictionId);
+
+await client.protect.killSwitch({ scopeKind: "agent", scopeRef: "agent://acme/support", reason: "runaway" });
+await client.protect.simulate({ intents, policyRefs: ["crm-guardrails@2.0.0"] });
+await client.protect.coverage();
+await client.protect.metricsSummary();
+```
+
+Server refusals (`{ error: { code, message } }`) surface as
+`ToolExecutionError` with the server `code` and HTTP status. The router side
+(`ToolApprovalPending`, `ToolCallDenied`, `router.resume`, `beforeAction`)
+is documented in the README under "Protect".
