@@ -1,7 +1,8 @@
 # Release: tag `vMAJOR.MINOR.PATCH` on `main` -> verified build -> npm publish
 # through trusted publishing (OIDC, no token in the repository) -> GitHub
-# release carrying the same tarball. A tag whose version does not match
-# package.json fails before anything is published. See AGENTS.md, Release.
+# release carrying the same tarball. A tag on a commit that is not reachable
+# from `main`, or one whose version does not match package.json, fails before
+# anything is published. See AGENTS.md, Release.
 name: release
 
 on:
@@ -27,6 +28,19 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: the tagged commit is reachable from main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+          commit="$(git rev-parse HEAD)"
+          if ! git merge-base --is-ancestor "$commit" refs/remotes/origin/main; then
+            echo "tag $GITHUB_REF_NAME points at $commit, which is not reachable from main" >&2
+            echo "a release tag must be created on a commit already merged to main" >&2
+            exit 1
+          fi
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 

@@ -89,6 +89,9 @@ release candidate.
 
 ## What the workflow will not do
 
+- It will not publish a tag whose commit is not reachable from `main`. A `v*` tag on an
+  unmerged branch fails at the first step, before any build or publish. Merge first, then
+  tag the merged commit.
 - It will not publish when `package.json` disagrees with the tag. Fix the version on
   `main`, then move the tag.
 - It will not publish from a fork or from a branch. Only a `v*` tag triggers it.
