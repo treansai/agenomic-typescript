@@ -3,3 +3,4 @@ dist
 coverage
 traces
 .DS_Store
+artifacts

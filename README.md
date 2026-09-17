@@ -17,7 +17,7 @@ Lightweight TypeScript SDK for instrumenting Node.js and TypeScript AI agents an
 ## Installation
 
 ```bash
-pnpm add agenomic-typescript
+pnpm add @treansai/agenomic-typescript
 ```
 
 Node.js `18+` is required.
@@ -25,7 +25,7 @@ Node.js `18+` is required.
 ## Basic Usage
 
 ```ts
-import { AgenomicClient, traceAgentRun } from "agenomic-typescript";
+import { AgenomicClient, traceAgentRun } from "@treansai/agenomic-typescript";
 
 const client = new AgenomicClient();
 
@@ -64,7 +64,7 @@ If no `endpoint` is configured, the SDK operates in local-only mode and will not
 ## Manual Trace Creation
 
 ```ts
-import { AgenomicClient } from "agenomic-typescript";
+import { AgenomicClient } from "@treansai/agenomic-typescript";
 
 const client = new AgenomicClient();
 
@@ -91,7 +91,7 @@ const envelope = trace.build();
 ## Node.js HTTP Ingestion
 
 ```ts
-import { AgenomicClient } from "agenomic-typescript";
+import { AgenomicClient } from "@treansai/agenomic-typescript";
 
 const client = new AgenomicClient({
   apiKey: process.env.AGENOMIC_API_KEY,
@@ -106,7 +106,7 @@ const client = new AgenomicClient({
 The SDK does not depend on `next`, so it can live in shared packages and still typecheck in non-Next environments.
 
 ```ts
-import { AgenomicClient, withTracedRoute } from "agenomic-typescript";
+import { AgenomicClient, withTracedRoute } from "@treansai/agenomic-typescript";
 
 const client = new AgenomicClient();
 
@@ -142,7 +142,7 @@ export const POST = withTracedRoute(
 ## JSONL Export
 
 ```ts
-import { AgenomicClient } from "agenomic-typescript";
+import { AgenomicClient } from "@treansai/agenomic-typescript";
 
 const client = new AgenomicClient();
 const trace = client.createTrace({
@@ -162,7 +162,7 @@ Each line is a standalone `TraceEnvelope`.
 Redaction paths are dotted paths applied relative to captured payloads such as run input/output and event input/output.
 
 ```ts
-import { applyRedaction } from "agenomic-typescript";
+import { applyRedaction } from "@treansai/agenomic-typescript";
 
 const scrubbed = applyRedaction(
   {
@@ -191,7 +191,7 @@ import {
   AgenomicClient,
   recordMCPToolCall,
   traceAgentRun,
-} from "agenomic-typescript";
+} from "@treansai/agenomic-typescript";
 
 const client = new AgenomicClient();
 
@@ -317,7 +317,7 @@ Configure, pin, and call Hugging Face models. The API token is never logged,
 returned, or embedded in any object, trace, or error.
 
 ```ts
-import { AgenomicClient, HuggingFaceClient, lockModel } from "agenomic-typescript";
+import { AgenomicClient, HuggingFaceClient, lockModel } from "@treansai/agenomic-typescript";
 
 const client = new AgenomicClient();
 await client.models.configure({
@@ -356,3 +356,8 @@ pnpm install
 pnpm test
 pnpm build
 ```
+
+## Release
+
+Tag a commit `vMAJOR.MINOR.PATCH` and GitHub Actions publishes the package to npm with
+provenance. See [docs/release.md](docs/release.md).

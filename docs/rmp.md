@@ -35,7 +35,7 @@ With a `baseUrl` (or `endpoint`), the same calls hit Agenomic Cloud with
 ## The loop session: `client.rmp`
 
 ```ts
-import { AgenomicClient } from "agenomic-typescript";
+import { AgenomicClient } from "@treansai/agenomic-typescript";
 
 const client = new AgenomicClient({
   apiKey: process.env.AGENOMIC_API_KEY,
