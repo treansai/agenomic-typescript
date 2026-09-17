@@ -1,8 +1,16 @@
 {
-  "name": "agenomic-typescript",
-  "version": "0.1.0",
+  "name": "@treansai/agenomic-typescript",
+  "version": "0.1.1",
   "description": "Lightweight TypeScript SDK for emitting Agenomic-compatible traces from Node.js and TypeScript agents.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/treansai/agenomic-typescript.git"
+  },
+  "homepage": "https://github.com/treansai/agenomic-typescript#readme",
+  "bugs": {
+    "url": "https://github.com/treansai/agenomic-typescript/issues"
+  },
   "author": "Agenomic",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -21,12 +29,15 @@
     "LICENSE"
   ],
   "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=18"
   },
   "packageManager": "pnpm@10.0.0",
   "scripts": {
-    "build": "pnpm typecheck && tsup src/index.ts --format esm,cjs --dts --clean",
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean && pnpm typecheck",
     "clean": "rm -rf dist",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

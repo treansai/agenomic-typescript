@@ -9,7 +9,7 @@ mode and `rmp.start()` still never launches anything.
 ## Serve your agent
 
 ```ts
-import { AgenomicClient, BridgeServer, type AgentTargetBridge } from "agenomic-typescript";
+import { AgenomicClient, BridgeServer, type AgentTargetBridge } from "@treansai/agenomic-typescript";
 
 const bridge: AgentTargetBridge = {
   capabilities: ["multi_turn", "benchmark_tools"],

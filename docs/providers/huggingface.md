@@ -15,7 +15,7 @@ The canonical provider name is `huggingface`. The following aliases are accepted
 - `hugging_face` (and `hugging-face`)
 
 ```ts
-import { normalizeProvider, isHuggingFace } from "agenomic-typescript";
+import { normalizeProvider, isHuggingFace } from "@treansai/agenomic-typescript";
 
 normalizeProvider("HF"); // "huggingface"
 normalizeProvider("Hugging-Face"); // "huggingface"
@@ -41,7 +41,7 @@ The token is held on a private field. `JSON.stringify(config)` reports only
 credentials (`https://user:pass@host`) are rejected.
 
 ```ts
-import { HuggingFaceConfig } from "agenomic-typescript";
+import { HuggingFaceConfig } from "@treansai/agenomic-typescript";
 
 const config = HuggingFaceConfig.fromEnv();
 config.hasToken(); // true | false
@@ -56,7 +56,7 @@ an `AbortController`. A `401`/`403` from the Hub or Inference API is surfaced as
 redaction.
 
 ```ts
-import { HuggingFaceClient } from "agenomic-typescript";
+import { HuggingFaceClient } from "@treansai/agenomic-typescript";
 
 const hf = new HuggingFaceClient(); // uses HuggingFaceConfig.fromEnv()
 
@@ -87,7 +87,7 @@ is reduced to a redacted `scheme://host[/path]` reference with any inline
 credentials and query/fragment stripped.
 
 ```ts
-import { lockModel } from "agenomic-typescript";
+import { lockModel } from "@treansai/agenomic-typescript";
 
 const lock = lockModel(meta, process.env.HUGGINGFACE_ENDPOINT_URL, {
   temperature: 0.2,
@@ -106,7 +106,7 @@ aliases and normalizes them to `huggingface`. When given a `path`, the resolved
 config is merged into a local `genome.yaml` under a `models:` list.
 
 ```ts
-import { AgenomicClient } from "agenomic-typescript";
+import { AgenomicClient } from "@treansai/agenomic-typescript";
 
 const client = new AgenomicClient();
 const config = await client.models.configure({
@@ -132,7 +132,7 @@ import {
   HuggingFaceClient,
   instrumentHuggingFace,
   traceAgentRun,
-} from "agenomic-typescript";
+} from "@treansai/agenomic-typescript";
 
 const client = new AgenomicClient();
 const hf = instrumentHuggingFace(new HuggingFaceClient());

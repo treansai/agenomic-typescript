@@ -1,0 +1,102 @@
+# Release: tag `vMAJOR.MINOR.PATCH` on `main` -> verified build -> npm publish
+# through trusted publishing (OIDC, no token in the repository) -> GitHub
+# release carrying the same tarball. A tag whose version does not match
+# package.json fails before anything is published. See AGENTS.md, Release.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@treansai/agenomic-typescript
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: npm CLI new enough for trusted publishing
+        run: |
+          set -euo pipefail
+          required=11.5.1
+          current=$(npm --version)
+          if [ "$(printf '%s\n%s\n' "$required" "$current" | sort -V | head -n1)" != "$required" ]; then
+            npm install -g npm@latest
+          fi
+          npm --version
+
+      - name: the tag and package.json agree on the version
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag_version="${TAG#v}"
+          pkg_version="$(node -p 'require("./package.json").version')"
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "tag $TAG carries version $tag_version, package.json carries $pkg_version" >&2
+            exit 1
+          fi
+          echo "version=$pkg_version" >> "$GITHUB_OUTPUT"
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run build
+
+      - run: pnpm run test
+
+      - name: pack
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          npm pack --pack-destination artifacts
+          ls -l artifacts
+
+      - name: publish to npm
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tarball="$(find ./artifacts -maxdepth 1 -name '*.tgz' | head -n1)"
+          if [ -z "$tarball" ]; then
+            echo "npm pack produced no tarball" >&2
+            exit 1
+          fi
+          name="$(node -p 'require("./package.json").name')"
+          if npm view "$name@$VERSION" version >/dev/null 2>&1; then
+            echo "$name@$VERSION is already on the registry, nothing to publish"
+          elif [ "${TAG#*-}" != "$TAG" ]; then
+            npm publish "$tarball" --access public --provenance --tag next
+          else
+            npm publish "$tarball" --access public --provenance
+          fi
+
+      - name: GitHub release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          name: v${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: artifacts/*.tgz
