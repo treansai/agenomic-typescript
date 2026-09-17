@@ -1,0 +1,82 @@
+# Gate on every push to `main` and every pull request: the workflows lint, the
+# history carries no secret, the SDK builds and tests on the maintained Node
+# lines, and the tarball that `release.yml` would publish stays well formed.
+# Runs with the default GITHUB_TOKEN only; a fork's pull request gets no secret.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.10@sha256:ef8299f97635c4c30e2298f48f30763ab782a4ad2c95b744649439a039421e36 -color
+
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        run: docker run --rm -v "$PWD:/repo" -w /repo ghcr.io/gitleaks/gitleaks:v8.30.0@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9 git --no-banner --redact=100 --exit-code 1 /repo
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20", "22", "24"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: pnpm run test
+
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - name: the tarball release.yml would publish is well formed
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          npm pack --pack-destination artifacts
+          tarball="$(find ./artifacts -maxdepth 1 -name '*.tgz' | head -n1)"
+          npm publish "$tarball" --access public --dry-run
+          expected='LICENSE README.md dist/index.cjs dist/index.d.cts dist/index.d.ts dist/index.js package.json'
+          files="$(tar tzf "$tarball" | sed 's|^package/||' | grep -v '/$' | sort | tr '\n' ' ' | sed 's/ $//')"
+          echo "packed: $files"
+          if [ "$files" != "$expected" ]; then
+            echo "the published file set changed" >&2
+            echo "expected: $expected" >&2
+            exit 1
+          fi
