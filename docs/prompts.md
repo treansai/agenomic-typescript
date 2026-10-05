@@ -150,7 +150,8 @@ const again = await client.bindings.get(agentId, binding.binding_id);
 
 - `threadKey(workspaceId, threadId)` and `executionKey(workspaceId, id)`
   hash application ids so that no raw id reaches the registry. They give the
-  same keys as the Python SDK.
+  same keys as the Python SDK, and refuse an id holding a lone surrogate with
+  `TypeError`, as the Python SDK does.
 - `create` is create-or-get on the thread key: a retry returns the same
   binding with `created: false`. No idempotency header is sent.
 - Name exactly one of `channel` and `releaseId`. `expectManifestDigest`

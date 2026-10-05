@@ -8,7 +8,7 @@ export const MANIFEST_SCHEMA = "agenomic.prompt_manifest/v1";
 export const ARTIFACT_SET_SCHEMA = "agenomic.prompt_artifact_set/v1";
 
 const MAX_JSON_DEPTH = 64;
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+export const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 export interface AjsViolation {
   code: string;

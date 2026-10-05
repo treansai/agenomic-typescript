@@ -141,6 +141,15 @@ describe("thread keys", () => {
   it("refuse a workspace id that is not a lowercase uuid", () => {
     expect(() => threadKey(WORKSPACE.toUpperCase(), "t")).toThrow(TypeError);
   });
+
+  it("refuse an id with a lone surrogate instead of folding it into another id's key", () => {
+    for (const id of ["a\uD800", "a\uDBFF", "\uDC00b", "x\uDFFFy"]) {
+      expect(() => threadKey(WORKSPACE, id)).toThrow(TypeError);
+      expect(() => executionKey(WORKSPACE, id)).toThrow(TypeError);
+    }
+    expect(threadKey(WORKSPACE, "a�")).toMatch(/^thread:sha256:[0-9a-f]{64}$/);
+    expect(threadKey(WORKSPACE, "a\u0000b")).toMatch(/^thread:sha256:[0-9a-f]{64}$/);
+  });
 });
 
 describe("client.prompts.get", () => {
@@ -447,6 +456,16 @@ describe("client.bindings", () => {
     expect((await rejection(cloud().bindings.create({ agentId: AGENT, threadKey: key, scope: "thread", channel: "production" }))).code).toBe(
       "manifest_digest_mismatch",
     );
+  });
+
+  it("answers invalid_response, not a TypeError, for a malformed child pin", async () => {
+    for (const child of [null, "pinned", { release_id: CHILD_RELEASE }]) {
+      vi.restoreAllMocks();
+      stubFetch(bindingRoutes(bindingDocument({ children: { [CHILD]: child } }), bundleDocument()));
+      const error = await rejection(cloud().bindings.create({ agentId: AGENT, threadKey: key, scope: "thread", channel: "production" }));
+      expect(error.constructor).toBe(ApiError);
+      expect(error).toMatchObject({ code: "invalid_response", status: 0 });
+    }
   });
 
   it("reads a binding with its artifacts", async () => {

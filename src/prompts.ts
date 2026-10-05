@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { AgenomicClient } from "./client";
 import { ApiError, PromptRefError, apiError, bindingError, integrityError } from "./errors";
 import { PromptBundle } from "./prompt-bundle";
-import { isPlainRecord } from "./prompt-digest";
+import { LONE_SURROGATE, isPlainRecord } from "./prompt-digest";
 import {
   formatPromptRef,
   isUuid,
@@ -88,6 +88,7 @@ const WORKSPACES = new WeakMap<AgenomicClient, Promise<string>>();
 function keyHash(workspaceId: string, identifier: string): string {
   if (!isUuid(workspaceId)) throw new TypeError("workspaceId must be a lowercase uuid");
   if (typeof identifier !== "string") throw new TypeError("thread and execution identifiers must be strings");
+  if (LONE_SURROGATE.test(identifier)) throw new TypeError("thread and execution identifiers must be well-formed Unicode");
   return createHash("sha256").update(`${THREAD_KEY_DOMAIN}\u0000${workspaceId}\u0000${identifier}`, "utf8").digest("hex");
 }
 
@@ -211,7 +212,8 @@ function readBinding(value: unknown, workspaceId: string, agentId: string): Exec
     typeof value.scope !== "string" ||
     typeof value.release_id !== "string" ||
     typeof value.prompt_manifest_digest !== "string" ||
-    !isPlainRecord(value.children)
+    !isPlainRecord(value.children) ||
+    !Object.values(value.children).every((child) => isPlainRecord(child) && typeof child.prompt_manifest_digest === "string")
   ) {
     throw invalidResponse("execution binding");
   }
