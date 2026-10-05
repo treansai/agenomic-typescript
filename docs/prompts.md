@@ -186,17 +186,17 @@ the first failed step:
 
 1. the document is in the Agenomic JSON subset and has the bundle schema
    (`bundle_incomplete`);
-2. it is pinned by `expectedBundleDigest` (`bundle_untrusted_key`);
-3. a signed export carries an `expires_at` that has not passed
-   (`bundle_incomplete`, `bundle_expired`);
-4. every prompt matches its content digest, and the whole artifact set
+2. a signed export carries an `expires_at` (`bundle_incomplete`);
+3. it is pinned by `expectedBundleDigest` (`bundle_untrusted_key`);
+4. its `expires_at`, when present, has not passed (`bundle_expired`);
+5. every prompt matches its content digest, and the whole artifact set
    matches the embedded digest and the pin (`prompt_digest_mismatch`);
-5. every manifest matches its digest, and `expectedManifestDigest` when given
+6. every manifest matches its digest, and `expectedManifestDigest` when given
    (`manifest_digest_mismatch`);
-6. the closure is exact: every slot, fragment and child is present, and
+7. the closure is exact: every slot, fragment and child is present, and
    nothing else (`bundle_incomplete` with `details.missing` and
    `details.extra`);
-7. the bundle belongs to `expectedWorkspaceId` and `expectedAgentId`
+8. the bundle belongs to `expectedWorkspaceId` and `expectedAgentId`
    (`bundle_scope_mismatch`).
 
 Pin the bundle digest rather than the manifest digest alone: only the bundle

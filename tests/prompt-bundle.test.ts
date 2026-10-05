@@ -21,6 +21,7 @@ import {
   AGENT,
   CHILD,
   OTHER_WORKSPACE,
+  RELEASE,
   WORKSPACE,
   bundleDocument,
   clone,
@@ -154,6 +155,35 @@ describe("PromptBundle.fromDocument", () => {
     const second = caught(() => PromptBundle.fromDocument(sealedExtra, pinned(sealedExtra)));
     expect(second.code).toBe("bundle_incomplete");
     expect(second.details).toMatchObject({ missing: [], extra: ["prm_unused:1"] });
+  });
+
+  it("refuses a child or a prompt entry that is not exactly the one its pin names", () => {
+    const closureError = (edit: (document: Json) => void): Json => {
+      const document = clone(bundleDocument()) as Json;
+      edit(document);
+      const sealed = seal(document);
+      const error = caught(() => PromptBundle.fromDocument(sealed, pinned(sealed)));
+      expect(error.code).toBe("bundle_incomplete");
+      return error.details;
+    };
+    const child = (document: Json): Json => (document.children as Record<string, Json>)[CHILD]!;
+    expect(closureError((document) => (child(document).release_id = RELEASE))).toEqual({ missing: [CHILD], extra: ["prm_writer:3"] });
+    expect(closureError((document) => (child(document).genome_version = null))).toEqual({ missing: [CHILD], extra: ["prm_writer:3"] });
+    expect(
+      closureError((document) => {
+        const manifest = child(document).manifest as Json;
+        manifest.agent_id = OTHER_WORKSPACE;
+        child(document).prompt_manifest_digest = promptDigest(manifest);
+      }),
+    ).toEqual({ missing: [CHILD], extra: ["prm_writer:3"] });
+    expect(
+      closureError((document) => {
+        (document.children as Record<string, Json>)[OTHER_WORKSPACE] = { ...clone(child(document)) };
+      }),
+    ).toEqual({ missing: [], extra: [OTHER_WORKSPACE] });
+    expect(
+      closureError((document) => (((document.prompts as Record<string, Json>)["prm_safety:2"] as Json).version = 3)),
+    ).toEqual({ missing: [], extra: ["prm_safety:2"] });
   });
 
   it("checks the expected manifest digest when one is given", () => {
