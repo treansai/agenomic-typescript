@@ -1,3 +1,5 @@
+import type { VaultClientOptions } from "./vault/transport";
+
 export type RunStatus = "running" | "success" | "error" | "cancelled";
 export type RedactionMode = "remove" | "mask" | "hash";
 export type ToolCallStatus = "ok" | "error";
@@ -205,6 +207,8 @@ export interface AgenomicClientOptions {
    */
   baseUrl?: string;
   headers?: Record<string, string>;
+  /** Agents Vault options (runtime token, replay fixtures, retry policy). */
+  vault?: VaultClientOptions;
 }
 
 export interface TraceAgentRunOptions {

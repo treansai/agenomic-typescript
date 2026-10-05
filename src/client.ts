@@ -17,6 +17,7 @@ import { ProtectResource } from "./protect";
 import { ToolsResource } from "./tools";
 import { TrackingResource } from "./tracking";
 import { TraceBuilder } from "./tracing";
+import { VaultResource } from "./vault/admin";
 
 export class AgenomicClient {
   readonly apiKey?: string;
@@ -39,6 +40,12 @@ export class AgenomicClient {
   readonly benchmarks: BenchmarksResource;
   /** Replay tool execution: Tool Gateway (real calls) and Tool Mock Engine. */
   readonly tools: ToolsResource;
+  /**
+   * Agents Vault (optional commercial module requiring the add-on): secret
+   * metadata, bindings, grants, runtime identities, rotations, revocations and
+   * evidence. Secrets are write-only; no method returns a value.
+   */
+  readonly vault: VaultResource;
 
   constructor(options: AgenomicClientOptions = {}) {
     this.apiKey = options.apiKey;
@@ -53,6 +60,7 @@ export class AgenomicClient {
     this.protect = new ProtectResource(this);
     this.benchmarks = new BenchmarksResource(this);
     this.tools = new ToolsResource(this);
+    this.vault = new VaultResource(this, options.vault);
   }
 
   async emitTrace(trace: TraceEnvelope): Promise<void> {
