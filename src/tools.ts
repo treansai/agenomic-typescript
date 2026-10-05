@@ -7,6 +7,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { AgenomicClient } from "./client";
+import type { VaultExecuteInput, VaultExecuteResult, VaultExecutionStatus } from "./vault/types";
 
 export const TOOL_EXECUTION_SCHEMA_VERSION = "agenomic.tool_execution/v1";
 
@@ -559,6 +560,22 @@ export class ToolsResource {
 
   router(runId: string, options: ToolRouterOptions = {}): ToolRouter {
     return new ToolRouter(this, runId, options);
+  }
+
+  /**
+   * Agents Vault (optional commercial module): execute one authorized business
+   * action with a credential the caller never sees. Returns the filtered
+   * business result and a receipt id; `actionId` is generated when omitted and
+   * returned. Every other outcome is a typed `VaultError`, and an unknown
+   * outcome is never retried. See `docs/vault.md`.
+   */
+  execute<T = unknown>(input: VaultExecuteInput): Promise<VaultExecuteResult<T>> {
+    return this.client.vault.runtime.execute<T>(input);
+  }
+
+  /** Reads one execution of this runtime identity by `actionId`; any state is returned as data. */
+  executionStatus<T = unknown>(actionId: string): Promise<VaultExecutionStatus<T>> {
+    return this.client.vault.runtime.getExecution<T>(actionId);
   }
 }
 
