@@ -7,7 +7,7 @@ changes once published, so a run can always say which prompt text it used.
 The contract is RFC 0012 of `agenomic-spec`. Its conformance vectors are
 vendored under `tests/fixtures/spec-vectors/` and run by the test suite, so
 references, digests, rendering and bundle verification give the same answers
-here as in the Python SDK, the `agm` CLI and Agenomic Cloud.
+here as in the other implementations that consume the same vectors.
 
 This package has the minimal surface: references, rendering, digests,
 `client.prompts` (get, resolve, agent resolution), `client.bindings` and
@@ -228,9 +228,12 @@ node --experimental-strip-types examples/prompts-render.ts bundle.json sha256:..
 
 ## Errors
 
-Every error of `client.prompts` and `client.bindings` is an `ApiError` with
+Registry, verification and render failures are `ApiError` instances with
 `code`, `status` (0 when raised locally) and `details`. Registry errors keep
 their code, status and `details`, plus `request_id` (`error.requestId`).
+Invalid arguments (no selector or two, a missing thread key or scope, a
+workspace id that is not a lowercase uuid, a reference that is not a string)
+throw `Error` or `TypeError` before any request.
 
 | Class | Codes |
 |---|---|
