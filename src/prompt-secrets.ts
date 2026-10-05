@@ -1,4 +1,4 @@
-import { codePointLength, isPlainRecord } from "./prompt-digest";
+import { isPlainRecord } from "./prompt-digest";
 
 export const SECRET_PATTERN_SET = "agenomic-secrets/1";
 const REDACTED = "[REDACTED]";
@@ -40,16 +40,37 @@ export interface SecretFinding {
   length: number;
 }
 
+function codePointIndex(text: string): Uint32Array {
+  const index = new Uint32Array(text.length + 1);
+  let count = 0;
+  for (let unit = 0; unit < text.length; unit += 1) {
+    index[unit] = count;
+    const code = text.charCodeAt(unit);
+    const next = unit + 1 < text.length ? text.charCodeAt(unit + 1) : 0;
+    if (code >= 0xd800 && code <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+      index[unit + 1] = count;
+      unit += 1;
+    }
+    count += 1;
+  }
+  index[text.length] = count;
+  return index;
+}
+
 export function scanSecrets(text: string): SecretFinding[] {
   const found: Array<SecretFinding & { order: number }> = [];
+  let positions: Uint32Array | undefined;
   SECRET_PATTERNS.forEach(([pattern, source], order) => {
     const expression = new RegExp(source.source, source.flags);
     let match: RegExpExecArray | null;
     while ((match = expression.exec(text)) !== null) {
+      positions ??= codePointIndex(text);
+      const start = positions[match.index] ?? 0;
+      const end = positions[match.index + match[0].length] ?? start;
       found.push({
         pattern,
-        offset: codePointLength(text.slice(0, match.index)),
-        length: codePointLength(match[0]),
+        offset: start,
+        length: end - start,
         order,
       });
     }
