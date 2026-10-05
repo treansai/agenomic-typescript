@@ -198,7 +198,7 @@ export class ToolApprovalPending extends ToolExecutionError {
   }
 }
 
-function apiBase(client: AgenomicClient): string | undefined {
+export function apiBase(client: AgenomicClient): string | undefined {
   const raw = client.baseUrl ?? client.endpoint;
   if (!raw) return undefined;
   return raw.replace(/\/+$/, "").replace(/\/v1\/traces$/, "");
