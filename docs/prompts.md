@@ -11,8 +11,10 @@ here as in the other implementations that consume the same vectors.
 
 This package has the minimal surface: references, rendering, digests,
 `client.prompts` (get, resolve, agent resolution), `client.bindings` and
-offline bundle reading. Publishing, drafts, aliases, channels, experiments and
-the LangGraph adapter live in the Python SDK.
+offline bundle reading. Publishing, drafts, aliases, channel reads,
+experiments and the LangGraph adapter live in the Python SDK. No SDK moves a
+channel or approves a release (see "Channel moves and approvals" below), and
+"Limits of this version" lists what this package leaves out.
 
 ## Concepts
 
@@ -61,7 +63,10 @@ Rendering is local and synchronous. It fails before any model call.
 ```ts
 import { renderMessages, renderText, compose } from "@treansai/agenomic-typescript";
 
-const messages = renderMessages(version, { customer: "Ada", question: "Where is my parcel?" });
+const messages = renderMessages(version, {
+  customer: "Ada",
+  question: "Where is my parcel?",
+});
 const text = renderText(textVersion, { question: "Where is my parcel?" });
 const withHistory = compose(versionWithoutPlaceholder, { question: "Next?" }, history);
 ```
@@ -103,7 +108,10 @@ Errors name variables and paths, never values.
 ```ts
 import { AgenomicClient } from "@treansai/agenomic-typescript";
 
-const client = new AgenomicClient({ apiKey: process.env.AGENOMIC_API_KEY, baseUrl: "https://agenomic.example" });
+const client = new AgenomicClient({
+  apiKey: process.env.AGENOMIC_API_KEY,
+  baseUrl: "https://agenomic.example",
+});
 const workspaceId = await client.prompts.workspaceId();
 ```
 
@@ -135,7 +143,10 @@ console.log(staged.resolvedFrom);
 ```ts
 import { threadKey } from "@treansai/agenomic-typescript";
 
-const bundle = await client.prompts.resolveAgent({ agentId, channel: "production" });
+const bundle = await client.prompts.resolveAgent({
+  agentId,
+  channel: "production",
+});
 
 const { binding, artifacts, created } = await client.bindings.create({
   agentId,
@@ -159,6 +170,20 @@ const again = await client.bindings.get(agentId, binding.binding_id);
 - The artifacts are checked against the binding: workspace, agent, release,
   manifest digest and every child manifest digest.
 
+### Channel moves and approvals
+
+Promoting a release to a channel, rolling a channel back and approving a
+release need a signed-in session; an API key gets 403 `session_required`.
+This SDK authenticates with an API key, so it has no promote, rollback or
+approve method. An authorized person moves a channel from the promotion view
+of the Agenomic web app. The `agenomic channels promote` and
+`agenomic channels rollback` commands of the CLI print the move preview and
+where to complete the move, and never move a channel themselves.
+
+A move changes what new threads receive. A thread that already has a binding
+keeps its release, so read the prompts of a running thread from its binding,
+not from the channel.
+
 ## Offline bundles
 
 ```ts
@@ -176,10 +201,20 @@ const child = bundle.version("writer.response", { agentId: childAgentId });
 This SDK does not verify bundle signatures: `bundle.signatureVerified` is
 always `false`. A bundle loads only when it is pinned by
 `expectedBundleDigest`, the `prompt_bundle_digest` of the export. Verify the
-signed export once with a tool that checks signatures (for example
-`agenomic-py prompts bundle-verify`, which prints the digest), then deploy the
-digest with the file. A document without a pin is refused with
-`bundle_untrusted_key`; there is no way to load an unverified bundle.
+signed export once with a tool that checks signatures against the
+organization signing key, then deploy the digest with the file:
+
+```bash
+agenomic prompts export --agent <AGENT_ID> --channel production \
+  -o prompt-bundle.json --trust-key orgkey.pem --expires-in-days 30
+agenomic-py prompts bundle-verify prompt-bundle.json \
+  --workspace <WORKSPACE_ID> --agent <AGENT_ID> --trust-key orgkey.pem
+```
+
+Both commands print `prompt_bundle_digest`. An export expires after 30 days
+unless `--expires-in-days` asks for 1 to 365. A document without a pin is
+refused with `bundle_untrusted_key`; there is no way to load an unverified
+bundle.
 
 `PromptBundle.fromDocument` (and `readPromptBundleFile`) refuse the bundle at
 the first failed step:
@@ -207,14 +242,19 @@ network or to an inline string. Online answers go through
 
 Offline limits: a disconnected process cannot learn that a release or a
 channel was revoked, and a bundle stays usable until its `expires_at` or
-until the operator removes it.
+until the operator removes it. The pin does not depend on the signing key, so
+rotating the organization key does not stop a pinned bundle from loading;
+after a key compromise, stop passing the old key to `--trust-key` when you
+verify exports.
 
 `examples/prompts-render.ts` writes a demo bundle, loads it with its pin and
 renders a slot. Run it after `pnpm build`:
 
 ```bash
 node --experimental-strip-types examples/prompts-render.ts
-node --experimental-strip-types examples/prompts-render.ts bundle.json sha256:... <workspace_id> <agent_id> planner.instructions '{"customer":"Ada","question":"Hi"}'
+node --experimental-strip-types examples/prompts-render.ts \
+  bundle.json sha256:... <workspace_id> <agent_id> planner.instructions \
+  '{"customer":"Ada","question":"Hi"}'
 ```
 
 ## Digests and secrets
@@ -236,14 +276,25 @@ Invalid arguments (no selector or two, a missing thread key or scope, a
 workspace id that is not a lowercase uuid, a reference that is not a string)
 throw `Error` or `TypeError` before any request.
 
-| Class | Codes |
-|---|---|
-| `PromptRefError` | `prompt_ref_invalid`, `prompt_ref_unversioned`, `prompt_ref_cross_workspace`, `workspace_mismatch` |
-| `PromptTemplateError` | `prompt_template_invalid`, `prompt_secret_detected`, `prompt_content_too_large`, `prompt_kind_mismatch`, `prompt_fragment_cycle`, `prompt_fragment_depth_exceeded` |
-| `PromptRenderError` | `prompt_render_error` |
-| `PromptIntegrityError` | `prompt_digest_mismatch`, `manifest_digest_mismatch`, `bundle_untrusted_key`, `bundle_incomplete`, `bundle_expired`, `bundle_scope_mismatch`, `artifact_integrity_error` |
-| `PromptBindingError` | `binding_mismatch`, `slot_not_in_manifest`, `child_agent_not_pinned`, `execution_binding_conflict`, `child_agent_conflict`, `release_not_bindable`, `session_required` |
-| `ApiError` | every other code, `http_error` for a non-JSON error body, `invalid_response`, `transport_error`, `cloud_required` |
+Codes map to classes as follows:
+
+- `PromptRefError`: `prompt_ref_invalid`, `prompt_ref_unversioned`,
+  `prompt_ref_cross_workspace`, `workspace_mismatch`.
+- `PromptTemplateError`: `prompt_template_invalid`,
+  `prompt_secret_detected`, `prompt_content_too_large`,
+  `prompt_kind_mismatch`, `prompt_fragment_cycle`,
+  `prompt_fragment_depth_exceeded`.
+- `PromptRenderError`: `prompt_render_error`.
+- `PromptIntegrityError`: `prompt_digest_mismatch`,
+  `manifest_digest_mismatch`, `bundle_untrusted_key`, `bundle_incomplete`,
+  `bundle_expired`, `bundle_scope_mismatch`, `artifact_integrity_error`.
+  `bundle_signature_invalid` and `bundle_ungoverned` map to this class too,
+  but this SDK never raises them because it does not verify signatures.
+- `PromptBindingError`: `binding_mismatch`, `slot_not_in_manifest`,
+  `child_agent_not_pinned`, `execution_binding_conflict`,
+  `child_agent_conflict`, `release_not_bindable`, `session_required`.
+- `ApiError`: every other code, `http_error` for a non-JSON error body,
+  `invalid_response`, `transport_error`, `cloud_required`.
 
 ## Conformance vectors
 
@@ -252,3 +303,25 @@ copies `conformance/vectors/prompts/` from `agenomic-spec` and rewrites
 `tests/fixtures/spec-vectors/SPEC_VECTORS.lock`. The test
 `tests/prompts-conformance.test.ts` checks the lock and the manifest, then runs
 every vector whose consumers include `typescript`.
+
+## Limits of this version
+
+- Reading only: publishing, drafts, alias changes, imports, static
+  discovery, YAML prompt files, experiments, experiment runners and the
+  LangGraph adapter are in the Python SDK.
+- No channel move and no approval, from this or any SDK: they need a
+  signed-in session.
+- Bundle signatures are not verified; every offline bundle needs a digest
+  pin.
+- No retry and no outage fallback: the first registry or transport failure
+  is raised. Verified versions are cached in memory only, and there is no
+  binding cache, so a process that must run while the registry is
+  unreachable loads a pinned offline bundle.
+- `bindings.create` takes no child selectors: child agents are pinned from
+  the release manifest. The binding records the SDK name
+  `agenomic-typescript` with no SDK version.
+- No usage reporting: the Python `report_usage` call has no counterpart
+  here, so the observed prompt inventory receives no binding usage from
+  this SDK.
+- Node.js only: the package uses `node:crypto` and `node:fs`. CI runs the
+  test suite on Node 20, 22 and 24.

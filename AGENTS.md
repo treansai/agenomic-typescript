@@ -60,3 +60,12 @@ Decisions that would otherwise live in code comments. Keep entries short and fac
 - `tests/fixtures/spec-vectors/` is a byte copy of the SPEC prompt vectors made by `scripts/sync-spec-vectors.sh`; the harness checks `SPEC_VECTORS.lock` and `MANIFEST.json` before running any vector. `.gitleaks.toml` keeps the default rules and allowlists that directory only, because vectors R058, R059, S008, S009 and S014 hold deliberately fake tokens that the secret scanner must detect. Tests build secret-shaped strings at runtime instead of writing them literally.
 - Registry response goldens are wire shapes, not consistent documents (their manifests and closures disagree), so `tests/prompt-fixtures.ts` builds bundles, versions and bindings with real digests.
 - `examples/prompts-render.ts` imports `../dist/index.js` and runs with `node --experimental-strip-types` after `pnpm build`, like the Protect harness, because Node cannot resolve the extensionless imports of `src/`.
+- The code table also maps `bundle_signature_invalid` and `bundle_ungoverned`
+  to `PromptIntegrityError` although this SDK never raises them, so a code
+  keeps the class it has in the Python SDK; `docs/prompts.md` says they are
+  never raised here.
+- `CHANGELOG.md` starts with the managed prompts work: the repository had no
+  changelog for 0.1.1 and earlier, and those entries are not reconstructed.
+  It is not shipped: `files` lists `dist`, `README.md` and `LICENSE`, and
+  `npm pack` on npm 10.9.8 and 11.21.0 leaves a root `CHANGELOG.md` out, so
+  the packed file set the CI asserts is unchanged.
