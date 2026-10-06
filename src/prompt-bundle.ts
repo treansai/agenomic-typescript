@@ -179,13 +179,14 @@ function closureGaps(manifest: Manifest, prompts: Record<string, Json>): { wante
   while (pending.length > 0) {
     const pin = pending.pop()!;
     const ref = pinRef(pin);
-    if (wanted.has(ref)) continue;
+    const seen = wanted.has(ref);
     wanted.add(ref);
     const entry = hasOwn(prompts, ref) ? prompts[ref] : undefined;
     if (!isPlainRecord(entry) || entry.content_digest !== pin.content_digest) {
       missing.add(ref);
       continue;
     }
+    if (seen) continue;
     const content = entry.content;
     const fragments = isPlainRecord(content) ? content.fragments : undefined;
     if (isPlainRecord(fragments)) pending.push(...Object.values(fragments).filter(isPlainRecord));
@@ -206,7 +207,7 @@ function checkClosure(document: BundleDocument): void {
     for (const ref of gaps.wanted) wanted.add(ref);
     for (const ref of gaps.missing) missing.add(ref);
     for (const childId of Object.keys(manifest.children)) {
-      if (reached.has(childId)) continue;
+      const seen = reached.has(childId);
       reached.add(childId);
       const pin = manifest.children[childId];
       const child = hasOwn(children, childId) ? children[childId] : undefined;
@@ -220,7 +221,7 @@ function checkClosure(document: BundleDocument): void {
         missing.add(childId);
         continue;
       }
-      pending.push(child.manifest);
+      if (!seen) pending.push(child.manifest);
     }
   }
   const extra = new Set<string>();

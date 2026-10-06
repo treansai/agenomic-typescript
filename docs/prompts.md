@@ -170,7 +170,9 @@ const again = await client.bindings.get(agentId, binding.binding_id);
 - Name exactly one of `channel` and `releaseId`. `expectManifestDigest`
   makes the registry refuse a binding pinned to another manifest.
 - The artifacts are checked against the binding: workspace, agent, release,
-  manifest digest and every child manifest digest.
+  manifest digest and the children. The artifacts carry exactly the children
+  the binding pins, each with the manifest digest the binding records; a
+  missing child and an unpinned child both raise `manifest_digest_mismatch`.
 
 ### Channel moves and approvals
 
@@ -230,9 +232,9 @@ the first failed step:
    matches the embedded digest and the pin (`prompt_digest_mismatch`);
 6. every manifest matches its digest, and `expectedManifestDigest` when given
    (`manifest_digest_mismatch`);
-7. the closure is exact: every slot, fragment and child is present, and
-   nothing else (`bundle_incomplete` with `details.missing` and
-   `details.extra`);
+7. the closure is exact: every slot, fragment and child is present and
+   agrees with every pin that names it, and nothing else (`bundle_incomplete`
+   with `details.missing` and `details.extra`);
 8. the bundle belongs to `expectedWorkspaceId` and `expectedAgentId`
    (`bundle_scope_mismatch`).
 

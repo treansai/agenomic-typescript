@@ -234,13 +234,13 @@ function bindingBundle(binding: ExecutionBinding, artifacts: unknown): PromptBun
     throw bindingError("binding_mismatch", "the artifacts belong to another release than the binding", { binding_id: binding.binding_id });
   }
   const digests = bundle.childManifestDigests;
-  for (const childId of Object.keys(binding.children)) {
-    const pinned = binding.children[childId]!.prompt_manifest_digest;
+  for (const childId of [...new Set([...Object.keys(binding.children), ...Object.keys(digests)])].sort()) {
+    const pinned = Object.hasOwn(binding.children, childId) ? binding.children[childId]!.prompt_manifest_digest : undefined;
     const actual = Object.hasOwn(digests, childId) ? digests[childId] : undefined;
     if (actual !== pinned) {
       throw integrityError("manifest_digest_mismatch", "a child manifest differs from the binding pin", {
         child_agent_id: childId,
-        expected: pinned,
+        expected: pinned ?? null,
         actual: actual ?? null,
       });
     }

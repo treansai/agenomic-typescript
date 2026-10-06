@@ -469,6 +469,20 @@ describe("client.bindings", () => {
     );
   });
 
+  it("refuses artifacts that carry a child the binding does not pin", async () => {
+    const artifacts = bundleDocument();
+    const actual = ((artifacts.children as Record<string, Json>)[CHILD] as Json).prompt_manifest_digest;
+    const unpinned = bindingDocument({ children: {} });
+    stubFetch(bindingRoutes(unpinned, artifacts));
+    const created = await rejection(cloud().bindings.create({ agentId: AGENT, threadKey: key, scope: "thread", channel: "production" }));
+    expect(created).toBeInstanceOf(PromptIntegrityError);
+    expect(created).toMatchObject({ code: "manifest_digest_mismatch", details: { child_agent_id: CHILD, expected: null, actual } });
+    vi.restoreAllMocks();
+    stubFetch(bindingRoutes(unpinned, artifacts));
+    const loaded = await rejection(cloud().bindings.get(AGENT, "bnd_01j9x4w6k2m8n0p3q5r7s9t1v3"));
+    expect(loaded).toMatchObject({ code: "manifest_digest_mismatch", details: { child_agent_id: CHILD, expected: null, actual } });
+  });
+
   it("answers invalid_response, not a TypeError, for a malformed child pin", async () => {
     for (const child of [null, "pinned", { release_id: CHILD_RELEASE }]) {
       vi.restoreAllMocks();

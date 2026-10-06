@@ -20,8 +20,12 @@ import {
 import {
   AGENT,
   CHILD,
+  CHILD_RELEASE,
+  GENOME,
   OTHER_WORKSPACE,
+  PLANNER,
   RELEASE,
+  SAFETY,
   WORKSPACE,
   bundleDocument,
   clone,
@@ -184,6 +188,68 @@ describe("PromptBundle.fromDocument", () => {
     expect(
       closureError((document) => (((document.prompts as Record<string, Json>)["prm_safety:2"] as Json).version = 3)),
     ).toEqual({ missing: [], extra: ["prm_safety:2"] });
+  });
+
+  it("checks every pin that names a child, not only the first one met", () => {
+    const MIDDLE = "3c9e1f5a-6b7d-4e8f-9a0b-1c2d3e4f5a6b";
+    const MIDDLE_RELEASE = "8a7b6c5d-4e3f-4a2b-9c1d-0e9f8a7b6c5d";
+    const sound = { release_id: CHILD_RELEASE, genome_version: GENOME };
+    const diamond = (rootPin: Json, middlePin: Json): Json => {
+      const document = clone(bundleDocument()) as Json;
+      const manifest = document.manifest as Json;
+      (manifest.children as Json)[CHILD] = rootPin;
+      (manifest.children as Json)[MIDDLE] = { release_id: MIDDLE_RELEASE, genome_version: GENOME };
+      document.prompt_manifest_digest = promptDigest(manifest);
+      const middle = { schema: "agenomic.prompt_manifest/v1", agent_id: MIDDLE, slots: {}, children: { [CHILD]: middlePin } };
+      (document.children as Record<string, Json>)[MIDDLE] = {
+        release_id: MIDDLE_RELEASE,
+        genome_version: GENOME,
+        prompt_manifest_digest: promptDigest(middle),
+        manifest: middle,
+      };
+      return seal(document);
+    };
+    const load = (document: Json): PromptBundle => PromptBundle.fromDocument(document, pinned(document));
+    expect(load(diamond(sound, sound)).childAgentIds).toEqual([CHILD, MIDDLE].sort());
+    for (const middlePin of [
+      { release_id: RELEASE, genome_version: GENOME },
+      { release_id: CHILD_RELEASE, genome_version: null },
+    ]) {
+      const error = caught(() => load(diamond(sound, middlePin)));
+      expect(error.code).toBe("bundle_incomplete");
+      expect(error.details).toEqual({ missing: [CHILD], extra: [] });
+    }
+    const conflicting = caught(() => load(diamond({ release_id: RELEASE, genome_version: GENOME }, sound)));
+    expect(conflicting.code).toBe("bundle_incomplete");
+    expect(conflicting.details).toMatchObject({ missing: [CHILD] });
+  });
+
+  it("checks every pin that names a prompt, not only the first one met", () => {
+    const withSlot = (slotPin: Json, first: boolean): Json => {
+      const document = clone(bundleDocument()) as Json;
+      const manifest = document.manifest as Json;
+      const slots = manifest.slots as Record<string, Json>;
+      manifest.slots = first ? { extra: slotPin, ...slots } : { ...slots, extra: slotPin };
+      document.prompt_manifest_digest = promptDigest(manifest);
+      return seal(document);
+    };
+    const load = (document: Json): PromptBundle => PromptBundle.fromDocument(document, pinned(document));
+    const stale = (promptId: string, version: number, content: Json): Json => ({
+      ...pin(promptId, version, content),
+      content_digest: `sha256:${"0".repeat(64)}`,
+    });
+    const cases: Array<[Json, string]> = [
+      [stale("prm_planner", 7, PLANNER), "prm_planner:7"],
+      [stale("prm_safety", 2, SAFETY), "prm_safety:2"],
+    ];
+    expect(load(withSlot(pin("prm_planner", 7, PLANNER), true)).slots()).toEqual(["extra", "planner.instructions"]);
+    for (const first of [true, false]) {
+      for (const [slotPin, ref] of cases) {
+        const error = caught(() => load(withSlot(slotPin, first)));
+        expect(error.code).toBe("bundle_incomplete");
+        expect(error.details).toMatchObject({ missing: [ref] });
+      }
+    }
   });
 
   it("checks the expected manifest digest when one is given", () => {
