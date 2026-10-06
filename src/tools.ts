@@ -209,6 +209,7 @@ export type JsonMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 export interface JsonExchange {
   status: number;
   body: Record<string, unknown> | undefined;
+  headers?: Headers;
 }
 
 /** One HTTP exchange against the API root; only transport faults throw. */
@@ -255,7 +256,7 @@ export async function fetchJson(
   } catch {
     parsed = undefined;
   }
-  return { status: response.status, body: parsed };
+  return { status: response.status, body: parsed, headers: response.headers };
 }
 
 /** Turns a non-2xx `{ error: { code, message } }` or a non-JSON body into a typed error. */

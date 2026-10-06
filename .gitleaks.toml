@@ -1,0 +1,8 @@
+title = "agenomic-typescript"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Vendored SPEC conformance vectors carry deliberately fake secret-shaped strings that the secret scanner tests must detect"
+paths = ['''^tests/fixtures/spec-vectors/''']
