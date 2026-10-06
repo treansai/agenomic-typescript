@@ -1089,7 +1089,7 @@ function closureSource(version: ManagedPromptVersion): FragmentSource {
     const fragment = pending.pop()!;
     const key = versionKey(fragment.ref);
     if (closure.has(key)) continue;
-    closure.set(key, { promptKind: fragment.kind, content: fragment.content });
+    closure.set(key, { promptKind: fragment.kind === "fragment" ? "fragment" : null, content: fragment.content });
     pending.push(...Object.values(fragment.fragments));
   }
   return (promptId, number) => closure.get(`${promptId}:${number}`);

@@ -207,6 +207,17 @@ describe("client.prompts.get", () => {
     expect(error.code).toBe("prompt_digest_mismatch");
   });
 
+  it("renders an unchanged copy of a fetched version with fragments and refuses an edited one", async () => {
+    stubFetch(registry());
+    const version = await cloud().prompts.get("prm_planner:7");
+    const variables = { customer: "Ada", question: "q" };
+    const expected = renderMessages(version, variables);
+    expect(renderMessages({ ...version }, variables)).toEqual(expected);
+    expect(renderMessages(structuredClone(version), variables)).toEqual(expected);
+    const edited = { ...version, content: { ...version.content, partials: { tone: "casual" } } };
+    expect(() => renderMessages(edited, variables)).toThrow(PromptIntegrityError);
+  });
+
   it("resolves an alias on every call and never caches the alias target", async () => {
     const resolution = {
       input: "prm_planner@staging",

@@ -119,7 +119,9 @@ The first call reads `GET /v1/whoami` once per client to learn the workspace.
 Run production agents with a `read` key: it reads, resolves and creates
 execution bindings. An API key binds or resolves only a release that is
 approved, in production, or the current target of one of the agent's
-channels; any other release gets 403 `session_required`.
+channels; any other release gets 403 `session_required`. A rejected or
+rolled back release gets 409 `release_not_bindable`, whatever the
+credential.
 
 ### Reading prompts
 

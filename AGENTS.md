@@ -64,6 +64,12 @@ Decisions that would otherwise live in code comments. Keep entries short and fac
   to `PromptIntegrityError` although this SDK never raises them, so a code
   keeps the class it has in the Python SDK; `docs/prompts.md` says they are
   never raised here.
+- A version object the SDK did not build is validated again with its
+  fragments' kinds taken from their `kind`, but only `"fragment"` is passed
+  on as a prompt kind. A fetched fragment has `kind` `"text"` (the registry
+  version answer carries no prompt kind, as in Python), so passing `"text"`
+  would refuse an unchanged copy with `fragment_not_fragment`; the pin
+  digest and the `fragment_not_text` check still apply.
 - `CHANGELOG.md` starts with the managed prompts work: the repository had no
   changelog for 0.1.1 and earlier, and those entries are not reconstructed.
   It is not shipped: `files` lists `dist`, `README.md` and `LICENSE`, and
