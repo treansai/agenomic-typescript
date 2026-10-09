@@ -7,6 +7,7 @@ import {
   KnowledgeClient,
   knowledgeTool,
   normalizeVersion,
+  renderKnowledgeEvidence,
   versionNumber,
   type TrackingEventType,
 } from "../src/index";
@@ -477,6 +478,17 @@ describe("knowledgeTool", () => {
     expect(last(calls, "POST", /\/search$/).body).toEqual({ query: "refund window", version: 3, top_k: 4, include_context: true });
     await tool.execute({ query: "refund", top_k: 2 });
     expect(last(calls, "POST", /\/search$/).body?.top_k).toBe(2);
+  });
+
+  it("drops trailing newlines of the context in linear time", () => {
+    const results = fixture("search").results as Parameters<typeof renderKnowledgeEvidence>[1];
+    expect(renderKnowledgeEvidence("evidence\n\n\n", results, true).startsWith("evidence\nCitations:\n")).toBe(true);
+    const hostile = `${"\n".repeat(200_000)}x`;
+    const started = Date.now();
+    const output = renderKnowledgeEvidence(hostile, results, true);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(output.startsWith(hostile)).toBe(true);
+    expect(renderKnowledgeEvidence("\n\n", results, true).startsWith("\nCitations:")).toBe(true);
   });
 
   it("returns citations only without context", async () => {

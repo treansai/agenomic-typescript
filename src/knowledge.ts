@@ -1255,6 +1255,12 @@ export class KnowledgeClient {
   }
 }
 
+function trimTrailingNewlines(text: string): string {
+  let end = text.length;
+  while (end > 0 && text.charCodeAt(end - 1) === 10) end -= 1;
+  return text.slice(0, end);
+}
+
 function clean(value: string | null | undefined): string {
   return (value ?? "").replace(CONTROL, " ").trim().slice(0, 200);
 }
@@ -1266,7 +1272,7 @@ export function renderKnowledgeEvidence(
 ): string {
   if (results.length === 0) return NO_EVIDENCE;
   const lines: string[] = [];
-  if (includeContext && context) lines.push(context.replace(/\n+$/, ""));
+  if (includeContext && context) lines.push(trimTrailingNewlines(context));
   lines.push("Citations:");
   for (const result of results) {
     const version = result.version === null ? "draft" : `v${result.version}`;
