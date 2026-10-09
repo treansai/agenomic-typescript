@@ -6,6 +6,31 @@ The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Knowledge bases (Agenomic Cloud only, guide in `docs/knowledge.md`):
+  `client.knowledge` (`KnowledgeClient`) with `list`, `get`,
+  `listDocuments`, `getDocument`, `createDocument`, `uploadDocument` (raw
+  bytes from a `Uint8Array`, an `ArrayBuffer` or a string), `getSection`,
+  `search`, `query` (text form or operation), `answer`, `listVersions`,
+  `getVersion`, `diffVersions`, `publish` and `rollback` with `ifMatch`,
+  `getAgentKnowledge`, `putAgentKnowledge`, `agentSearch` with an execution
+  context, `getJob` and `waitForJob`. Wire types are the snake_case
+  contract types; versions are given as `3`, `"3"`, `"v3"`, `"published"`
+  or `"draft"` (`normalizeVersion`).
+- `client.knowledge.knowledgeBase(kbId)` returns a handle with `search`,
+  `getDocument` and `getSection`, which resolves a heading through the
+  structured query route and keeps only sections of the requested document.
+- `knowledgeTool({ client, knowledgeBase, version, topK })` returns a plain
+  tool definition (`name`, `description`, JSON schema `parameters`,
+  `execute`) that returns the delimited evidence rendered by the gateway and
+  a citation list, with agent-scoped retrieval when `agentId` is given.
+- `knowledge.retrieve` joins `TrackingEventType`.
+- `fetchRaw` sends a raw request body through the same transport as
+  `fetchJson`.
+
 ## [0.1.4] - 2026-10-06
 
 ### Added

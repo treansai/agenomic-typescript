@@ -14,6 +14,7 @@ import {
 } from "./rmp";
 import { BenchmarksResource } from "./benchmarks";
 import { ProtectResource } from "./protect";
+import { KnowledgeClient } from "./knowledge";
 import { BindingsResource, PromptsResource } from "./prompts";
 import { ToolsResource } from "./tools";
 import { TrackingResource } from "./tracking";
@@ -42,6 +43,7 @@ export class AgenomicClient {
   readonly tools: ToolsResource;
   readonly prompts: PromptsResource;
   readonly bindings: BindingsResource;
+  readonly knowledge: KnowledgeClient;
 
   constructor(options: AgenomicClientOptions = {}) {
     this.apiKey = options.apiKey;
@@ -58,6 +60,7 @@ export class AgenomicClient {
     this.tools = new ToolsResource(this);
     this.prompts = new PromptsResource(this);
     this.bindings = new BindingsResource(this);
+    this.knowledge = new KnowledgeClient(this);
   }
 
   async emitTrace(trace: TraceEnvelope): Promise<void> {

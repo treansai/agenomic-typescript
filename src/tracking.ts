@@ -32,7 +32,8 @@ export type TrackingEventType =
   | "harness.violation"
   | "alert.created"
   | "agent.completed"
-  | "agent.failed";
+  | "agent.failed"
+  | "knowledge.retrieve";
 
 export interface TrackingStartOptions {
   /** Canonical agent id, e.g. `agent://org/name`. */
