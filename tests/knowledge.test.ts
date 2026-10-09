@@ -275,6 +275,24 @@ describe("client.knowledge", () => {
     expect(last(calls, "POST", /\/answer$/).body).toEqual({ query: "refund window?", version: "published", top_k: 4 });
   });
 
+  it("sends an answer once on ambiguous failures", async () => {
+    const answer = `/v1/knowledge-bases/${KB}/answer`;
+    for (const status of [500, 502, 503, 504]) {
+      const calls = stubFetch((call) =>
+        call.path === answer ? { status, body: { error: { code: "upstream_unavailable", message: "busy" } } } : undefined,
+      );
+      const failed = await rejection(cloud().knowledge.answer(KB, "refund window?"));
+      expect(failed).toBeInstanceOf(ApiError);
+      expect(calls.filter((call) => call.path === answer)).toHaveLength(1);
+      vi.restoreAllMocks();
+    }
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("fetch failed"));
+    const failed = await rejection(cloud().knowledge.answer(KB, "refund window?"));
+    expect(failed).toBeInstanceOf(ApiError);
+    expect((failed as ApiError).code).toBe("transport_error");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("reads a section by id", async () => {
     const calls = stubFetch();
     const detail = await cloud().knowledge.getSection(KB, DOC, SECTION, { version: 3, include: ["children"] });
