@@ -220,6 +220,34 @@ export async function fetchJson(
   body?: unknown,
   extraHeaders: Record<string, string> = {},
 ): Promise<JsonExchange> {
+  return exchange(
+    client,
+    method,
+    path,
+    body !== undefined ? { body: JSON.stringify(body), contentType: "application/json" } : undefined,
+    extraHeaders,
+  );
+}
+
+/** One HTTP exchange that sends a raw body (document uploads); only transport faults throw. */
+export async function fetchRaw(
+  client: AgenomicClient,
+  method: JsonMethod,
+  path: string,
+  body: Uint8Array<ArrayBuffer>,
+  contentType: string,
+  extraHeaders: Record<string, string> = {},
+): Promise<JsonExchange> {
+  return exchange(client, method, path, { body, contentType }, extraHeaders);
+}
+
+async function exchange(
+  client: AgenomicClient,
+  method: JsonMethod,
+  path: string,
+  payload: { body: string | Uint8Array<ArrayBuffer>; contentType: string } | undefined,
+  extraHeaders: Record<string, string>,
+): Promise<JsonExchange> {
   const base = apiBase(client);
   if (!base) {
     throw new ToolExecutionError(
@@ -233,12 +261,12 @@ export async function fetchJson(
     response = await fetch(base + path, {
       method,
       headers: {
-        ...(body !== undefined ? { "content-type": "application/json" } : {}),
+        ...(payload !== undefined ? { "content-type": payload.contentType } : {}),
         ...(client.apiKey ? { authorization: `Bearer ${client.apiKey}` } : {}),
         ...client.headers,
         ...extraHeaders,
       },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      ...(payload !== undefined ? { body: payload.body } : {}),
     });
   } catch (error) {
     throw new ToolExecutionError("transport_error", `${method} ${path} failed: ${String(error)}`, 0);

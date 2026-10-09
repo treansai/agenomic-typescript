@@ -338,6 +338,29 @@ const messages = renderMessages(artifacts.version("planner.instructions"), { que
 See [docs/prompts.md](docs/prompts.md) for rendering rules, bindings, bundles
 and error codes, and `examples/prompts-render.ts` for an offline example.
 
+## Knowledge Bases
+
+`client.knowledge` searches governed knowledge bases in Agenomic Cloud with
+citations, uploads documents as raw bytes, reads versions and publishes them,
+and runs agent-scoped retrieval pinned to an execution. `knowledgeTool`
+returns a framework-neutral tool definition (`name`, `description`,
+`parameters`, `execute`).
+
+```ts
+import { AgenomicClient, knowledgeTool } from "@treansai/agenomic-typescript";
+
+const client = new AgenomicClient({ apiKey: process.env.AGENOMIC_API_KEY, baseUrl: "https://agenomic.example" });
+const kb = client.knowledge.knowledgeBase("kb_customer_support");
+const found = await kb.search("How long is the refund window?", { version: "v3" });
+console.log(found.results[0]?.citation.uri);
+
+const searchKb = knowledgeTool({ client, knowledgeBase: "kb_customer_support", version: "v3", topK: 5 });
+const evidence = await searchKb.execute({ query: "refund window" });
+```
+
+Retrieved text is untrusted data: the tool returns the delimited evidence the
+gateway renders, followed by citations. See [docs/knowledge.md](docs/knowledge.md).
+
 ## OpenAI Wrapper Placeholder
 
 `instrumentOpenAI()` does not require the OpenAI SDK as a dependency. Pass any client-like object exposing `responses.create()` or `chat.completions.create()` and the wrapper will record basic `model_call` events when a trace is active.
