@@ -112,7 +112,7 @@ function errorDetails(error: Record<string, unknown>): Record<string, unknown> {
   return details;
 }
 
-function acceptApiJson(method: JsonMethod, path: string, exchange: JsonExchange): Record<string, unknown> {
+export function acceptApiJson(method: JsonMethod, path: string, exchange: JsonExchange): Record<string, unknown> {
   const fallback = `${method} ${path} returned ${exchange.status}`;
   if (exchange.status < 200 || exchange.status >= 300) {
     const error = exchange.body?.error;

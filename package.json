@@ -1,6 +1,6 @@
 {
   "name": "@treansai/agenomic-typescript",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Lightweight TypeScript SDK for emitting Agenomic-compatible traces from Node.js and TypeScript agents.",
   "license": "MIT",
   "repository": {
