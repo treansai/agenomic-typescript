@@ -14,6 +14,7 @@ import {
 } from "./rmp";
 import { BenchmarksResource } from "./benchmarks";
 import { ProtectResource } from "./protect";
+import { BindingsResource, PromptsResource } from "./prompts";
 import { ToolsResource } from "./tools";
 import { TrackingResource } from "./tracking";
 import { TraceBuilder } from "./tracing";
@@ -46,6 +47,8 @@ export class AgenomicClient {
    * evidence. Secrets are write-only; no method returns a value.
    */
   readonly vault: VaultResource;
+  readonly prompts: PromptsResource;
+  readonly bindings: BindingsResource;
 
   constructor(options: AgenomicClientOptions = {}) {
     this.apiKey = options.apiKey;
@@ -61,6 +64,8 @@ export class AgenomicClient {
     this.benchmarks = new BenchmarksResource(this);
     this.tools = new ToolsResource(this);
     this.vault = new VaultResource(this, options.vault);
+    this.prompts = new PromptsResource(this);
+    this.bindings = new BindingsResource(this);
   }
 
   async emitTrace(trace: TraceEnvelope): Promise<void> {
