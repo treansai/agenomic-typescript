@@ -13,6 +13,7 @@ Lightweight TypeScript SDK for instrumenting Node.js and TypeScript AI agents an
 - Hugging Face connection: provider normalization, Hub metadata + credential validation, inference, model locking, and tracing
 - MCP tool call helper types and recorders
 - Next.js-friendly route handler wrapper
+- Agents Vault client (optional commercial module): execute actions with credentials the agent never sees
 - Managed prompts: digest-verified prompt versions, local rendering, execution bindings and pinned offline bundles
 
 ## Installation
@@ -308,6 +309,29 @@ message to `chat.completions.create` requests and sets or prefixes
 idempotently, before the call leaves the process; the recorded `model_call`
 input is the injected request.
 
+## Agents Vault (optional commercial module)
+
+Agents Vault lets an agent *use* a credential without ever *receiving* it: the
+agent calls `client.tools.execute(...)` with a runtime token and gets the filtered
+business result plus a receipt id. Secrets are write-only and no method returns a
+value. The module requires the Agents Vault add-on on your workspace; without it
+the server answers with a typed "locked" error, and the rest of the SDK is
+unaffected.
+
+```ts
+import { AgenomicClient } from "@treansai/agenomic-typescript";
+
+const agent = new AgenomicClient({ baseUrl: "https://api.agenomic.dev", vault: { runtimeToken: process.env.AGENOMIC_RUNTIME_TOKEN } });
+const { result, receiptId, actionId } = await agent.tools.execute({
+  tool: "crm.contacts.create",
+  binding: "binding-crm-sales",
+  arguments: { email: "ada@example.com" },
+});
+```
+
+See [docs/vault.md](docs/vault.md) for concepts, administration through
+`client.vault`, the error table, replay fixtures and what is not supported.
+
 ## Managed Prompts
 
 `client.prompts` reads versioned prompts from the Agenomic prompt registry and
@@ -337,6 +361,29 @@ const messages = renderMessages(artifacts.version("planner.instructions"), { que
 
 See [docs/prompts.md](docs/prompts.md) for rendering rules, bindings, bundles
 and error codes, and `examples/prompts-render.ts` for an offline example.
+
+## Knowledge Bases
+
+`client.knowledge` searches governed knowledge bases in Agenomic Cloud with
+citations, uploads documents as raw bytes, reads versions and publishes them,
+and runs agent-scoped retrieval pinned to an execution. `knowledgeTool`
+returns a framework-neutral tool definition (`name`, `description`,
+`parameters`, `execute`).
+
+```ts
+import { AgenomicClient, knowledgeTool } from "@treansai/agenomic-typescript";
+
+const client = new AgenomicClient({ apiKey: process.env.AGENOMIC_API_KEY, baseUrl: "https://agenomic.example" });
+const kb = client.knowledge.knowledgeBase("kb_customer_support");
+const found = await kb.search("How long is the refund window?", { version: "v3" });
+console.log(found.results[0]?.citation.uri);
+
+const searchKb = knowledgeTool({ client, knowledgeBase: "kb_customer_support", version: "v3", topK: 5 });
+const evidence = await searchKb.execute({ query: "refund window" });
+```
+
+Retrieved text is untrusted data: the tool returns the delimited evidence the
+gateway renders, followed by citations. See [docs/knowledge.md](docs/knowledge.md).
 
 ## OpenAI Wrapper Placeholder
 

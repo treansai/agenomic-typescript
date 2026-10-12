@@ -7,6 +7,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { AgenomicClient } from "./client";
+import type { VaultExecuteInput, VaultExecuteResult, VaultExecutionStatus } from "./vault/types";
 
 export const TOOL_EXECUTION_SCHEMA_VERSION = "agenomic.tool_execution/v1";
 
@@ -198,7 +199,7 @@ export class ToolApprovalPending extends ToolExecutionError {
   }
 }
 
-function apiBase(client: AgenomicClient): string | undefined {
+export function apiBase(client: AgenomicClient): string | undefined {
   const raw = client.baseUrl ?? client.endpoint;
   if (!raw) return undefined;
   return raw.replace(/\/+$/, "").replace(/\/v1\/traces$/, "");
@@ -220,6 +221,34 @@ export async function fetchJson(
   body?: unknown,
   extraHeaders: Record<string, string> = {},
 ): Promise<JsonExchange> {
+  return exchange(
+    client,
+    method,
+    path,
+    body !== undefined ? { body: JSON.stringify(body), contentType: "application/json" } : undefined,
+    extraHeaders,
+  );
+}
+
+/** One HTTP exchange that sends a raw body (document uploads); only transport faults throw. */
+export async function fetchRaw(
+  client: AgenomicClient,
+  method: JsonMethod,
+  path: string,
+  body: Uint8Array<ArrayBuffer>,
+  contentType: string,
+  extraHeaders: Record<string, string> = {},
+): Promise<JsonExchange> {
+  return exchange(client, method, path, { body, contentType }, extraHeaders);
+}
+
+async function exchange(
+  client: AgenomicClient,
+  method: JsonMethod,
+  path: string,
+  payload: { body: string | Uint8Array<ArrayBuffer>; contentType: string } | undefined,
+  extraHeaders: Record<string, string>,
+): Promise<JsonExchange> {
   const base = apiBase(client);
   if (!base) {
     throw new ToolExecutionError(
@@ -233,12 +262,12 @@ export async function fetchJson(
     response = await fetch(base + path, {
       method,
       headers: {
-        ...(body !== undefined ? { "content-type": "application/json" } : {}),
+        ...(payload !== undefined ? { "content-type": payload.contentType } : {}),
         ...(client.apiKey ? { authorization: `Bearer ${client.apiKey}` } : {}),
         ...client.headers,
         ...extraHeaders,
       },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      ...(payload !== undefined ? { body: payload.body } : {}),
     });
   } catch (error) {
     throw new ToolExecutionError("transport_error", `${method} ${path} failed: ${String(error)}`, 0);
@@ -560,6 +589,22 @@ export class ToolsResource {
 
   router(runId: string, options: ToolRouterOptions = {}): ToolRouter {
     return new ToolRouter(this, runId, options);
+  }
+
+  /**
+   * Agents Vault (optional commercial module): execute one authorized business
+   * action with a credential the caller never sees. Returns the filtered
+   * business result and a receipt id; `actionId` is generated when omitted and
+   * returned. Every other outcome is a typed `VaultError`, and an unknown
+   * outcome is never retried. See `docs/vault.md`.
+   */
+  execute<T = unknown>(input: VaultExecuteInput): Promise<VaultExecuteResult<T>> {
+    return this.client.vault.runtime.execute<T>(input);
+  }
+
+  /** Reads one execution of this runtime identity by `actionId`; any state is returned as data. */
+  executionStatus<T = unknown>(actionId: string): Promise<VaultExecutionStatus<T>> {
+    return this.client.vault.runtime.getExecution<T>(actionId);
   }
 }
 
