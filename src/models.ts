@@ -205,6 +205,8 @@ export interface AgenomicClientOptions {
    */
   baseUrl?: string;
   headers?: Record<string, string>;
+  /** Known mapping from agent references (`agent://org/name`) to gateway agent UUIDs. */
+  agentIds?: Record<string, string>;
 }
 
 export interface TraceAgentRunOptions {
