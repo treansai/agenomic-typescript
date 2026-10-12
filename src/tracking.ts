@@ -33,6 +33,15 @@ export type TrackingEventType =
   | "alert.created"
   | "agent.completed"
   | "agent.failed"
+  | "agent.step.failed"
+  | "turn.started"
+  | "turn.completed"
+  | "turn.failed"
+  | "model.call.failed"
+  | "tool.call.failed"
+  | "retrieval.started"
+  | "retrieval.completed"
+  | "retrieval.failed"
   | "knowledge.retrieve";
 
 export interface TrackingStartOptions {

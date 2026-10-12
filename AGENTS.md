@@ -103,3 +103,21 @@ Decisions that would otherwise live in code comments. Keep entries short and fac
 - `knowledgeTool` returns a plain `{ name, description, parameters, execute }` object, with no framework dependency and a JSON schema whose argument names (`query`, `top_k`) match the Python tool. `execute` renders the gateway's delimited context (escaping and the untrusted-data preamble are the server's) and one citation line per result built from ids, path and URI with control characters removed; `includeContext: false` returns citations only. A gateway refusal returns `knowledge search failed: <code>` so the model reads it; `cloud_required` and argument errors reject. With `agentId`, `version` is refused and the execution identity comes from the options merged with the per-call `context.execution`.
 - `knowledge.retrieve` joins `TrackingEventType` (a type union, no runtime allowlist exists in this SDK).
 
+## SDK wire conformance (PRA-04, PRA-05, D8, D9)
+
+The gateway DTOs are the source of truth; SDK public signatures stay stable.
+
+- `/v1/traces` and `/v1/traces/batch` take `{agent_id: UUID, external_id, payload, events:[{event_type, payload}]}`
+  (batch wraps in `{items}`). SDK envelopes use `agent://org/name`, so both SDKs resolve the reference to the
+  registered agent UUID (UUID passthrough, explicit `agent_ids`/`agentIds` map, else `GET /v1/agents` matching
+  slug or name against the last path segment; cached). Unknown agent raises instead of sending a body the gateway rejects.
+- Python `upload_bundle` sends JSON `{agent_id, version, hash:"", metadata, archive_base64}` (the server recomputes the
+  Merkle hash and accepts an empty one). `version` is a new optional kwarg, default parsed from `name-X.Y.Z.bundle...`.
+- There is no gateway ATEP segment route. `upload_atep_segment` reads the segment and posts each event to
+  `POST /v1/governance/events` with `source: "atep"`.
+- `get_replay_report` uses `/v1/replay-jobs/{id}/report`.
+- Python `TrackingResource.start` gains `baseline`, `allowed_tools` (merged into baseline) and `parent_session_id`,
+  sent only when set.
+- TS `TrackingEventType` now equals the Python vocabulary; the gateway accepts any `type` string.
+- TS `sendTraceToHttp` keeps posting to the given endpoint URL; the agent lookup derives the base by stripping `/v1/traces`.
+

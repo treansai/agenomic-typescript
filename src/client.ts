@@ -26,6 +26,7 @@ export class AgenomicClient {
   readonly endpoint?: string;
   readonly baseUrl?: string;
   readonly headers?: Record<string, string>;
+  private readonly agentIds: Record<string, string>;
   /** Online tracking of production agents (drift / loops / intent / harness). */
   readonly tracking: TrackingResource;
   /** Model configuration (provider-agnostic; validates known providers). */
@@ -57,6 +58,7 @@ export class AgenomicClient {
     this.endpoint = options.endpoint;
     this.baseUrl = options.baseUrl;
     this.headers = options.headers;
+    this.agentIds = { ...options.agentIds };
     this.tracking = new TrackingResource(this);
     this.models = new ModelsResource(this);
     this.rmp = new RmpResource(this);
@@ -80,6 +82,7 @@ export class AgenomicClient {
     await sendTraceToHttp(this.endpoint, payload, {
       apiKey: this.apiKey,
       headers: this.headers,
+      agentIds: this.agentIds,
     });
   }
 
