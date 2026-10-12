@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgenomicClient } from "../src/client";
-import { sendTraceToHttp } from "../src/exporters/http";
+import { gatewayBase, sendTraceToHttp } from "../src/exporters/http";
 import type { TrackingEventType } from "../src/tracking";
 
 const AGENT_UUID = "1e004ebf-0a2f-4b93-ad7e-d87c91fdb385";
@@ -129,6 +129,26 @@ describe("trace emit against the gateway wire format", () => {
       agentUuid: AGENT_UUID,
     });
     expect(calls[0]?.body.agent_id).toBe(AGENT_UUID);
+  });
+
+  it("wraps the request in items for the batch endpoint", async () => {
+    const calls = stubFetch({
+      "GET /v1/agents": () => Response.json(AGENTS_LISTING),
+      "POST /v1/traces/batch": () => Response.json({}, { status: 201 }),
+    });
+    const client = new AgenomicClient();
+    const envelope = buildTrace(client).build();
+    await sendTraceToHttp("http://127.0.0.1:8090/v1/traces/batch", envelope);
+    expect(calls[0]?.url).toBe("http://127.0.0.1:8090/v1/agents");
+    expect(calls[1]?.body.items).toHaveLength(1);
+    expect(calls[1]?.body.items[0].agent_id).toBe(AGENT_UUID);
+  });
+
+  it("derives the gateway base from trace endpoints", () => {
+    expect(gatewayBase("http://h/v1/traces")).toBe("http://h");
+    expect(gatewayBase("http://h/v1/traces/batch//")).toBe("http://h");
+    expect(gatewayBase("http://h/")).toBe("http://h");
+    expect(gatewayBase(`http://h${"/".repeat(100_000)}x`)).toBe(`http://h${"/".repeat(100_000)}x`);
   });
 });
 

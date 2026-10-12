@@ -24,8 +24,22 @@ export function isUuid(value: string): boolean {
   return UUID_PATTERN.test(value);
 }
 
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end -= 1;
+  return value.slice(0, end);
+}
+
+function isBatchEndpoint(endpoint: string): boolean {
+  return trimTrailingSlashes(endpoint).endsWith("/v1/traces/batch");
+}
+
 export function gatewayBase(endpoint: string): string {
-  return endpoint.replace(/\/+$/, "").replace(/\/v1\/traces(\/batch)?$/, "");
+  const trimmed = trimTrailingSlashes(endpoint);
+  for (const suffix of ["/v1/traces/batch", "/v1/traces"]) {
+    if (trimmed.endsWith(suffix)) return trimmed.slice(0, -suffix.length);
+  }
+  return trimmed;
 }
 
 function authHeaders(options: HttpExporterOptions): Record<string, string> {
@@ -58,7 +72,7 @@ export async function resolveAgentUuid(
   const body = (await response.json()) as {
     agents?: Array<{ id: string; name?: string; slug?: string }>;
   };
-  const tail = agent.replace(/\/+$/, "").split("/").pop() ?? agent;
+  const tail = trimTrailingSlashes(agent).split("/").pop() ?? agent;
   const match = (body.agents ?? []).find(
     (item) =>
       item.slug === agent ||
@@ -95,10 +109,11 @@ export async function sendTraceToHttp(
 ): Promise<void> {
   const parsed = TraceEnvelopeSchema.parse(trace);
   const agentUuid = await resolveAgentUuid(endpoint, parsed.run.agentId, options);
+  const request = toGatewayTrace(parsed, agentUuid);
   const response = await fetch(endpoint, {
     method: "POST",
     headers: authHeaders(options),
-    body: JSON.stringify(toGatewayTrace(parsed, agentUuid)),
+    body: JSON.stringify(isBatchEndpoint(endpoint) ? { items: [request] } : request),
   });
 
   if (!response.ok) {
