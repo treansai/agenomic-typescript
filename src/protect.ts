@@ -1,6 +1,6 @@
 import type { AgenomicClient } from "./client";
 import { ProtectResource as RmpProtectResource } from "./rmp";
-import { requestJson, ToolExecutionError, type ProtectEffectiveMode, type ProtectOutcome, type TransformationProposal } from "./tools";
+import { requestJson, ToolExecutionError, type EntitlementState, type ProtectEffectiveMode, type ProtectOutcome, type TransformationProposal } from "./tools";
 
 export type PolicyBindingScopeKind = "org" | "environment" | "agent" | "tool_contract" | "run";
 export type BindingStatus = "active" | "revoked";
@@ -213,8 +213,51 @@ export interface CoverageRow {
   limits: string;
 }
 
+/** Organization level protection facts; `mandatory_in_force` is false when not entitled. */
+export interface OrgProtectionCoverage {
+  entitlement: EntitlementState;
+  protect_mandatory: boolean;
+  mandatory_in_force: boolean;
+  settings_revision: number;
+  active_bindings: number;
+  active_exemptions: number;
+}
+
 export interface CoverageResponse {
   families: CoverageRow[];
+  organization?: OrgProtectionCoverage;
+}
+
+export interface ProtectSettings {
+  protect_mandatory: boolean;
+  mandatory_in_force: boolean;
+  entitlement: EntitlementState;
+  revision: number;
+  updated_by?: string | null;
+  updated_at?: string | null;
+}
+
+export type ExemptionScopeKind = "org" | "run";
+export type ExemptionStatus = "active" | "lifted" | "expired";
+
+export interface ProtectExemption {
+  id: string;
+  scope_kind: ExemptionScopeKind;
+  scope_ref: string;
+  reason: string;
+  status: ExemptionStatus;
+  created_by?: string | null;
+  created_at: string;
+  expires_at: string;
+  lifted_by?: string | null;
+  lifted_at?: string | null;
+}
+
+export interface CreateExemptionInput {
+  scopeKind: ExemptionScopeKind;
+  scopeRef?: string;
+  reason: string;
+  expiresAt: string;
 }
 
 export interface ProtectMetricsSummary {
@@ -302,6 +345,13 @@ function policyRecord(res: Record<string, unknown>): PolicyRecord {
   return policy as PolicyRecord;
 }
 
+function settings(res: Record<string, unknown>): ProtectSettings {
+  if (typeof res.protect_mandatory !== "boolean" || typeof res.revision !== "number") {
+    throw new ToolExecutionError("invalid_response", "settings response carries no protect_mandatory and revision", 0);
+  }
+  return res as unknown as ProtectSettings;
+}
+
 function simulation(res: Record<string, unknown>): SimulateResponse {
   if (typeof res.policy_snapshot_digest !== "string") {
     throw new ToolExecutionError("invalid_response", "simulate response carries no policy_snapshot_digest", 0);
@@ -320,6 +370,7 @@ export class ProtectResource extends RmpProtectResource {
   readonly policies: ProtectPoliciesResource;
   readonly bindings: ProtectBindingsResource;
   readonly restrictions: ProtectRestrictionsResource;
+  readonly exemptions: ProtectExemptionsResource;
 
   constructor(client: AgenomicClient) {
     super(client);
@@ -328,6 +379,21 @@ export class ProtectResource extends RmpProtectResource {
     this.policies = new ProtectPoliciesResource(client);
     this.bindings = new ProtectBindingsResource(client);
     this.restrictions = new ProtectRestrictionsResource(client);
+    this.exemptions = new ProtectExemptionsResource(client);
+  }
+
+  async getSettings(): Promise<ProtectSettings> {
+    const res = await requestJson(this.client, "GET", "/v1/protect/settings");
+    return settings(res);
+  }
+
+  /** Turning mandatory protection on needs an admin; turning it off needs the owner. */
+  async updateSettings(input: { protectMandatory: boolean; expectedRevision?: number }): Promise<ProtectSettings> {
+    const res = await requestJson(this.client, "PUT", "/v1/protect/settings", {
+      protect_mandatory: input.protectMandatory,
+      ...(input.expectedRevision !== undefined ? { expected_revision: input.expectedRevision } : {}),
+    });
+    return settings(res);
   }
 
   /** Deterministic, versioned instruction overlay for a protect run. */
@@ -372,7 +438,11 @@ export class ProtectResource extends RmpProtectResource {
 
   async coverage(): Promise<CoverageResponse> {
     const res = await requestJson(this.client, "GET", "/v1/protect/coverage");
-    return { families: list<CoverageRow>(res, "families") };
+    const organization = res.organization;
+    return {
+      families: list<CoverageRow>(res, "families"),
+      ...(organization !== null && typeof organization === "object" ? { organization: organization as OrgProtectionCoverage } : {}),
+    };
   }
 
   async metricsSummary(): Promise<ProtectMetricsSummary> {
@@ -540,5 +610,30 @@ export class ProtectRestrictionsResource {
   async lift(restrictionId: string): Promise<ProtectRestriction> {
     const res = await requestJson(this.client, "POST", `/v1/protect/restrictions/${segment(restrictionId)}/lift`, {});
     return record<ProtectRestriction>(res, "id", "restriction");
+  }
+}
+
+export class ProtectExemptionsResource {
+  constructor(private readonly client: AgenomicClient) {}
+
+  async list(options: { status?: ExemptionStatus } = {}): Promise<ProtectExemption[]> {
+    const res = await requestJson(this.client, "GET", `/v1/protect/exemptions${query({ status: options.status })}`);
+    return list<ProtectExemption>(res, "exemptions");
+  }
+
+  /** Owner only; time bound, so `expiresAt` is required. */
+  async create(input: CreateExemptionInput): Promise<ProtectExemption> {
+    const res = await requestJson(this.client, "POST", "/v1/protect/exemptions", {
+      scope_kind: input.scopeKind,
+      scope_ref: input.scopeRef ?? "",
+      reason: input.reason,
+      expires_at: input.expiresAt,
+    });
+    return record<ProtectExemption>(res, "id", "exemption");
+  }
+
+  async lift(exemptionId: string): Promise<ProtectExemption> {
+    const res = await requestJson(this.client, "POST", `/v1/protect/exemptions/${segment(exemptionId)}/lift`, {});
+    return record<ProtectExemption>(res, "id", "exemption");
   }
 }

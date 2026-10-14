@@ -6,6 +6,19 @@ The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Protect P0 mirror: `client.protect.getSettings` and `updateSettings`
+  (`protect_mandatory`), `client.protect.exemptions` (`list`, `create`,
+  `lift`), the `organization` block on `coverage()`, `EffectiveProtection`
+  on run reads (`protection`), and the invocation `phase` on invoke and
+  `authorizeLocal` results.
+- `ToolCallConflict`: a 409 on an unresolved attempt now raises a typed error
+  with `reason` (`in_flight`, `ambiguous_outcome`, `already_recorded`) and the
+  stored `invocation` status. It extends `ToolExecutionError` (code `conflict`).
+
 ## [0.1.4] - 2026-10-06
 
 ### Added

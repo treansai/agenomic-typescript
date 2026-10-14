@@ -26,6 +26,69 @@ export type ToolInvocationStatus = "success" | "error" | "aborted" | "timeout" |
 export type ToolExternalState = "none" | "confirmed" | "indeterminate";
 export type ProtectOutcome = "allow" | "deny" | "require_approval" | "pause" | "transform_proposal";
 export type ProtectEffectiveMode = "enforce" | "shadow";
+export type InvocationPhase =
+  | "received"
+  | "admission_pending"
+  | "approval_pending"
+  | "denied"
+  | "authorized"
+  | "dispatching"
+  | "succeeded"
+  | "failed"
+  | "outcome_unknown";
+export type EntitlementState = "entitled" | "not_entitled" | "unknown";
+export type RequirementSource = "mandatory_org" | "binding" | "run_binding";
+export type ProtectionDenial =
+  | "protect_required:mandatory_org"
+  | "protect_required:binding"
+  | "protect_required:run_binding"
+  | "kill_switch"
+  | "restriction_active"
+  | "capability_denied"
+  | "protect_state_unavailable";
+export type EffectiveState = "not_applicable" | "enforced" | "shadow" | "exempt" | "none" | "blocked" | "unknown";
+
+export interface ExemptionRef {
+  id: string;
+  scope_kind: string;
+  scope_ref: string;
+  expires_at: string;
+}
+
+/** What protects a run right now; only `state === "enforced"` means protected. */
+export interface EffectiveProtection {
+  entitlement: EntitlementState;
+  org_mandatory: boolean;
+  requirement?: RequirementSource;
+  run_mode: string;
+  protect_block: boolean;
+  protect_mode?: ProtectEffectiveMode;
+  exemption?: ExemptionRef;
+  denial?: ProtectionDenial;
+  state: EffectiveState;
+}
+
+/** Durable state of one invocation (mirror of `InvocationStatusResponse`). */
+export interface InvocationStatus {
+  record_id: string;
+  run_id: string;
+  phase: InvocationPhase;
+  status: ToolInvocationStatus;
+  external_state: ToolExternalState;
+  tool: string;
+  logical_call_id: string;
+  repetition: number;
+  attempt: number;
+  error_code?: string;
+  requires_reconciliation: boolean;
+  protect?: ProtectDecision;
+  approval_id?: string;
+  reconciliation?: Record<string, unknown>;
+  started_at: string;
+  phase_at?: string;
+}
+
+export type ConflictReason = "in_flight" | "ambiguous_outcome" | "already_recorded";
 
 /** Admission stamp on an invocation (mirror of `InvocationDecision`). */
 export interface ProtectDecision {
@@ -81,6 +144,7 @@ export interface ToolCallEnvelope {
   decision?: string;
   transformation?: TransformationProposal;
   safe_explanation?: string;
+  phase?: InvocationPhase;
 }
 
 /** Native tool result plus the Agenomic technical envelope; `result` is null when denied or pending. */
@@ -117,6 +181,7 @@ export interface LocalAuthorization {
   approvalId?: string;
   permit?: SignedPermit;
   protect?: ProtectDecision;
+  phase?: InvocationPhase;
 }
 
 /** The call identity handed to `beforeAction` before any request leaves the process. */
@@ -158,6 +223,34 @@ export class ToolCallError extends Error {
     this.code = String(code);
   }
 }
+
+/**
+ * An identity already recorded was submitted again (HTTP 409). `reason` is
+ * `in_flight` while the attempt is being processed, `ambiguous_outcome` when it
+ * may have run and needs reconciliation, `already_recorded` otherwise. Nothing
+ * was executed again; the stored state is on `invocation`.
+ */
+export class ToolCallConflict extends ToolExecutionError {
+  constructor(
+    readonly reason: ConflictReason,
+    message: string,
+    readonly invocation: InvocationStatus,
+    readonly requestId?: string,
+  ) {
+    super("conflict", message, 409);
+    this.name = "ToolCallConflict";
+  }
+
+  get inFlight(): boolean {
+    return this.reason === "in_flight";
+  }
+
+  get ambiguous(): boolean {
+    return this.reason === "ambiguous_outcome";
+  }
+}
+
+const CONFLICT_REASONS: ReadonlySet<string> = new Set(["in_flight", "ambiguous_outcome", "already_recorded"]);
 
 /** Admission refused the call (403 `policy_denied`, transform proposal, rejected or expired approval); nothing ran. */
 export class ToolCallDenied extends ToolExecutionError {
@@ -291,7 +384,11 @@ async function exchange(
 /** Turns a non-2xx `{ error: { code, message } }` or a non-JSON body into a typed error. */
 export function acceptJson(method: JsonMethod, path: string, exchange: JsonExchange): Record<string, unknown> {
   if (exchange.status < 200 || exchange.status >= 300) {
-    const error = (exchange.body?.error ?? {}) as { code?: string; message?: string };
+    const error = (exchange.body?.error ?? {}) as { code?: string; message?: string; reason?: string; request_id?: string };
+    const invocation = exchange.body?.agenomic as InvocationStatus | undefined;
+    if (exchange.status === 409 && error.reason && CONFLICT_REASONS.has(error.reason) && invocation && typeof invocation === "object") {
+      throw new ToolCallConflict(error.reason as ConflictReason, error.message ?? `${method} ${path} returned 409`, invocation, error.request_id);
+    }
     throw new ToolExecutionError(
       error.code ?? "http_error",
       error.message ?? `${method} ${path} returned ${exchange.status}`,
@@ -323,11 +420,17 @@ function readDecision(body: Record<string, unknown>): Omit<LocalAuthorization, "
   const permit = body.permit;
   const protect = body.protect;
   return {
+    ...(typeof body.phase === "string" ? { phase: body.phase as InvocationPhase } : {}),
     ...(body.record_id !== undefined ? { recordId: String(body.record_id) } : {}),
     ...(body.approval_id !== undefined ? { approvalId: String(body.approval_id) } : {}),
     ...(permit !== null && typeof permit === "object" ? { permit: permit as SignedPermit } : {}),
     ...(protect !== null && typeof protect === "object" ? { protect: protect as ProtectDecision } : {}),
   };
+}
+
+function runRecord(res: Record<string, unknown>): Record<string, unknown> {
+  const run = (res.run ?? {}) as Record<string, unknown>;
+  return res.protection !== null && typeof res.protection === "object" ? { ...run, protection: res.protection } : run;
 }
 
 function configBody(input: ToolExecutionConfigInput): Record<string, unknown> {
@@ -452,27 +555,27 @@ export class ToolsResource {
       ...(options.replayJobId ? { replay_job_id: options.replayJobId } : {}),
       ...(options.rmpSessionId ? { rmp_session_id: options.rmpSessionId } : {}),
     });
-    return (res.run ?? {}) as Record<string, unknown>;
+    return runRecord(res);
   }
 
   async getRun(runId: string): Promise<Record<string, unknown>> {
     const res = await this.request("GET", `/v1/tool-execution/runs/${runId}`);
-    return (res.run ?? {}) as Record<string, unknown>;
+    return runRecord(res);
   }
 
   async approveRun(runId: string, planHash: string): Promise<Record<string, unknown>> {
     const res = await this.request("POST", `/v1/tool-execution/runs/${runId}/approve`, { plan_hash: planHash });
-    return (res.run ?? {}) as Record<string, unknown>;
+    return runRecord(res);
   }
 
   async startRun(runId: string): Promise<Record<string, unknown>> {
     const res = await this.request("POST", `/v1/tool-execution/runs/${runId}/start`, {});
-    return (res.run ?? {}) as Record<string, unknown>;
+    return runRecord(res);
   }
 
   async cancelRun(runId: string): Promise<Record<string, unknown>> {
     const res = await this.request("POST", `/v1/tool-execution/runs/${runId}/cancel`, {});
-    return (res.run ?? {}) as Record<string, unknown>;
+    return runRecord(res);
   }
 
   async completeRun(runId: string, options: { failed?: boolean; errorMessage?: string } = {}) {
@@ -480,7 +583,7 @@ export class ToolsResource {
       failed: options.failed ?? false,
       ...(options.errorMessage ? { error_message: options.errorMessage } : {}),
     });
-    return (res.run ?? {}) as Record<string, unknown>;
+    return runRecord(res);
   }
 
   async report(runId: string) {
