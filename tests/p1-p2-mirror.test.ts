@@ -388,3 +388,84 @@ describe("correction client", () => {
     await expect(cloud().correction.getSettings()).rejects.toMatchObject({ code: "invalid_response" });
   });
 });
+
+describe("ToolRouter model calls", () => {
+  const PENDING = { decision: "pending", tool: "model:a/b", record_id: REC, approval_id: "apr_1" };
+  const { logicalCallId: _omit, ...DECLARED } = REQUEST;
+
+  function routeAuthorize(replies: Reply[], approvals: string[] = []): Call[] {
+    let authorize = 0;
+    let approval = 0;
+    return stubFetch((url) => {
+      if (url.endsWith("/authorize")) return replies[Math.min(authorize++, replies.length - 1)]!;
+      if (url.includes("/approvals/")) return { body: { id: "apr_1", status: approvals[Math.min(approval++, approvals.length - 1)] } };
+      return { body: { record_id: REC } };
+    });
+  }
+
+  it("mints a stable logical id, applies the repetition and records a denial", async () => {
+    const calls = routeAuthorize([{ status: 403, body: DENIED }]);
+    const router = cloud().tools.router(RUN, { repetition: 3 });
+    const call = vi.fn(async () => "never");
+    const error = await router.guardModelCall(DECLARED, call).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ModelCallDenied);
+    expect(call).not.toHaveBeenCalled();
+    expect(calls[0]!.body).toMatchObject({ logical_call_id: "model:anthropic/claude-sonnet-5#1", repetition: 3 });
+    expect(router.calls[0]!.agenomic.status).toBe("denied");
+  });
+
+  it("throws pending without polling by default", async () => {
+    const calls = routeAuthorize([{ status: 202, body: PENDING }]);
+    const router = cloud().tools.router(RUN);
+    const error = await router.guardModelCall(REQUEST, async () => "never").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ModelCallPending);
+    expect(router.calls[0]!.agenomic).toMatchObject({ status: "pending", approval_id: "apr_1" });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("resumes explicitly with the same identity", async () => {
+    const calls = routeAuthorize([{ status: 202, body: PENDING }, { body: ALLOW }], ["pending", "approved"]);
+    const router = cloud().tools.router(RUN);
+    const call = vi.fn(async () => "ok");
+    const pending = (await router.guardModelCall(REQUEST, call).catch((e: unknown) => e)) as ModelCallPending;
+    const result = await router.resumeModelCall(pending, call, {}, { pollIntervalMs: 1, timeoutMs: 1000 });
+    expect(result).toBe("ok");
+    const authorizes = calls.filter((c) => c.url.endsWith("/authorize"));
+    expect(authorizes).toHaveLength(2);
+    expect(authorizes[1]!.body).toEqual(authorizes[0]!.body);
+  });
+
+  it("auto-resumes once when opted in", async () => {
+    routeAuthorize([{ status: 202, body: PENDING }, { body: ALLOW }], ["approved"]);
+    const call = vi.fn(async () => "ok");
+    const result = await cloud().tools.router(RUN).guardModelCall(REQUEST, call, { autoResume: { pollIntervalMs: 1 } });
+    expect(result).toBe("ok");
+    expect(call).toHaveBeenCalledOnce();
+  });
+
+  it("denies on a rejected approval and never calls the provider", async () => {
+    routeAuthorize([{ status: 202, body: PENDING }], ["rejected"]);
+    const call = vi.fn(async () => "never");
+    const error = await cloud().tools.router(RUN).guardModelCall(REQUEST, call, { autoResume: { pollIntervalMs: 1 } }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ModelCallDenied);
+    expect((error as ModelCallDenied).code).toBe("rejected");
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it("times out while the approval stays pending", async () => {
+    routeAuthorize([{ status: 202, body: PENDING }], ["pending"]);
+    const error = await cloud().tools.router(RUN).guardModelCall(REQUEST, async () => "never", { autoResume: { pollIntervalMs: 1, timeoutMs: 10 } }).catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "approval_timeout" });
+  });
+
+  it("does not loop when the approved call is pending again", async () => {
+    const calls = routeAuthorize([{ status: 202, body: PENDING }], ["approved"]);
+    const error = await cloud().tools.router(RUN).guardModelCall(REQUEST, async () => "never", { autoResume: { pollIntervalMs: 1 } }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ModelCallPending);
+    expect(calls.filter((c) => c.url.endsWith("/authorize"))).toHaveLength(2);
+  });
+
+  it("rejects an unknown approval", async () => {
+    await expect(cloud().tools.router(RUN).resumeModelCall("apr_x", async () => "x")).rejects.toMatchObject({ code: "unknown_approval" });
+  });
+});
