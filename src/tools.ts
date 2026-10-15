@@ -9,6 +9,8 @@ import { randomUUID } from "node:crypto";
 import type { AgenomicClient } from "./client";
 import {
   guardModelCall,
+  ModelCallDenied,
+  ModelCallPending,
   type GuardModelCallOptions,
   type ModelCallDecision,
   type ModelCallReportInput,
@@ -849,6 +851,15 @@ export interface ResumeOptions {
   timeoutMs?: number;
 }
 
+export interface RouterModelCallRequest extends Omit<ModelCallRequest, "logicalCallId"> {
+  logicalCallId?: string;
+}
+
+export interface RouterModelCallOptions<T> extends GuardModelCallOptions<T> {
+  /** Opt-in: on a pending model call, wait for the approval and run the guarded call once more. Bounded by `timeoutMs`. */
+  autoResume?: boolean | ResumeOptions;
+}
+
 interface RouterCallOptions {
   parentCallId?: string;
   attempt?: number;
@@ -897,6 +908,7 @@ export class ToolRouter {
   private sequence = 0;
   private readonly pending = new Map<string, PendingIdentity>();
   private readonly resuming = new Set<string>();
+  private readonly pendingModels = new Map<string, ModelCallRequest>();
 
   constructor(
     private readonly tools: ToolsResource,
@@ -1005,31 +1017,32 @@ export class ToolRouter {
     }
   }
 
+  private async pollApproval(approvalId: string, opts: ResumeOptions): Promise<string> {
+    const pollIntervalMs = opts.pollIntervalMs ?? 2000;
+    const timeoutMs = opts.timeoutMs ?? 900_000;
+    const started = Date.now();
+    for (;;) {
+      const { status } = await this.tools.client.protect.approvals.get(approvalId);
+      if (status !== "pending") return status;
+      if (Date.now() - started >= timeoutMs) {
+        throw new ToolExecutionError("approval_timeout", `approval ${approvalId} still pending after ${timeoutMs}ms`, 0);
+      }
+      await sleep(pollIntervalMs);
+    }
+  }
+
   private async awaitAndReissue<T>(
     approvalId: string,
     approval: ToolApprovalPending | string,
     identity: PendingIdentity,
     opts: ResumeOptions,
   ): Promise<T> {
-    const pollIntervalMs = opts.pollIntervalMs ?? 2000;
-    const timeoutMs = opts.timeoutMs ?? 900_000;
-    const started = Date.now();
-    let consumed = false;
-    for (;;) {
-      const { status } = await this.tools.client.protect.approvals.get(approvalId);
-      if (status === "approved" || status === "consumed") {
-        consumed = status === "consumed";
-        break;
-      }
-      if (status !== "pending") {
-        this.pending.delete(approvalId);
-        const envelope = typeof approval === "string" ? admissionEnvelope("denied", "", { decision: "denied" }) : approval.envelope;
-        throw new ToolCallDenied(identity.tool, { ...envelope, agenomic: { ...envelope.agenomic, status: "denied" } }, status);
-      }
-      if (Date.now() - started >= timeoutMs) {
-        throw new ToolExecutionError("approval_timeout", `approval ${approvalId} still pending after ${timeoutMs}ms`, 0);
-      }
-      await sleep(pollIntervalMs);
+    const status = await this.pollApproval(approvalId, opts);
+    const consumed = status === "consumed";
+    if (status !== "approved" && !consumed) {
+      this.pending.delete(approvalId);
+      const envelope = typeof approval === "string" ? admissionEnvelope("denied", "", { decision: "denied" }) : approval.envelope;
+      throw new ToolCallDenied(identity.tool, { ...envelope, agenomic: { ...envelope.agenomic, status: "denied" } }, status);
     }
     this.pending.delete(approvalId);
     try {
@@ -1043,6 +1056,81 @@ export class ToolRouter {
         );
       }
       throw error;
+    }
+  }
+
+  /**
+   * Route a model call through admission like a tool call: a stable
+   * `logicalCallId` is minted when absent, the router repetition is applied,
+   * and denied or pending outcomes are recorded in `calls`. A pending call
+   * throws `ModelCallPending` unless `autoResume` is set, in which case the
+   * approval is awaited (bounded by `timeoutMs`) and the call is re-run once.
+   */
+  async guardModelCall<T>(request: RouterModelCallRequest, call: () => Promise<T>, options: RouterModelCallOptions<T> = {}): Promise<T> {
+    const full: ModelCallRequest = {
+      ...request,
+      logicalCallId: request.logicalCallId ?? this.nextCallId(`model:${request.provider}/${request.model}`),
+      ...(request.repetition === undefined && this.options.repetition !== undefined ? { repetition: this.options.repetition } : {}),
+    };
+    const { autoResume, ...guardOptions } = options;
+    try {
+      return await this.runModelCall(full, call, guardOptions);
+    } catch (error) {
+      if (error instanceof ModelCallPending && autoResume) {
+        return this.resumeModelCall(error, call, guardOptions, autoResume === true ? {} : autoResume);
+      }
+      throw error;
+    }
+  }
+
+  private async runModelCall<T>(request: ModelCallRequest, call: () => Promise<T>, options: GuardModelCallOptions<T>): Promise<T> {
+    try {
+      return await this.tools.guardModelCall(this.runId, request, call, options);
+    } catch (error) {
+      if (error instanceof ModelCallDenied) {
+        this.calls.push(admissionEnvelope("denied", error.decision.recordId, error.decision));
+      } else if (error instanceof ModelCallPending) {
+        this.calls.push(admissionEnvelope("pending", error.decision.recordId, { decision: "pending", approvalId: error.approvalId, protect: error.decision.protect }));
+        if (error.approvalId) this.pendingModels.set(error.approvalId, request);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Wait for the approval behind a pending model call, then run the same
+   * guarded call again once with the same identity. A terminal status other
+   * than approved or consumed throws `ModelCallDenied` with that status as
+   * `code`; waiting past `timeoutMs` throws `ToolExecutionError("approval_timeout")`.
+   * A second pending answer is thrown, never looped on.
+   */
+  async resumeModelCall<T>(
+    approval: ModelCallPending | string,
+    call: () => Promise<T>,
+    options: GuardModelCallOptions<T> = {},
+    opts: ResumeOptions = {},
+  ): Promise<T> {
+    const approvalId = typeof approval === "string" ? approval : approval.approvalId;
+    const request = this.pendingModels.get(approvalId);
+    if (!request) {
+      throw new ToolExecutionError("unknown_approval", `no pending model call is registered for approval ${approvalId}`, 0);
+    }
+    if (this.resuming.has(approvalId)) {
+      throw new ToolExecutionError("resume_in_flight", `approval ${approvalId} is already being resumed by this router`, 0);
+    }
+    this.resuming.add(approvalId);
+    try {
+      const status = await this.pollApproval(approvalId, opts);
+      this.pendingModels.delete(approvalId);
+      if (status !== "approved" && status !== "consumed") {
+        const tool = typeof approval === "string" ? `model:${request.provider}/${request.model}` : approval.tool;
+        const protect = typeof approval === "string" ? undefined : approval.decision.protect;
+        const recordId = typeof approval === "string" ? "" : approval.decision.recordId;
+        throw new ModelCallDenied(tool, { decision: "denied", tool, recordId, ...(protect ? { protect } : {}) }, status);
+      }
+      return await this.runModelCall(request, call, options);
+    } finally {
+      this.resuming.delete(approvalId);
     }
   }
 

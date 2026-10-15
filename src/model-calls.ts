@@ -77,6 +77,7 @@ export class ModelCallDenied extends Error {
   constructor(
     readonly tool: string,
     readonly decision: ModelCallRefused,
+    readonly code: string = "denied",
   ) {
     super(`model call ${tool} denied${decision.protect?.reason_codes?.length ? `: ${decision.protect.reason_codes.join(",")}` : ""}`);
     this.name = "ModelCallDenied";

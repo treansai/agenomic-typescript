@@ -190,6 +190,8 @@ export {
   type ToolExternalState,
   type ToolProvenance,
   type ToolResultSource,
+  type RouterModelCallOptions,
+  type RouterModelCallRequest,
   type ToolRouterOptions,
   type TransformationProposal,
 } from "./tools";
