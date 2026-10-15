@@ -13,6 +13,7 @@ import {
   RmpResource,
 } from "./rmp";
 import { BenchmarksResource } from "./benchmarks";
+import { CorrectionResource } from "./correction";
 import { ProtectResource } from "./protect";
 import { KnowledgeClient } from "./knowledge";
 import { BindingsResource, PromptsResource } from "./prompts";
@@ -39,6 +40,8 @@ export class AgenomicClient {
   readonly monitor: MonitorResource;
   /** Alerts, action plans, recommendations, routing, and proactive policy enforcement. */
   readonly protect: ProtectResource;
+  /** Correction loop (cloud only): incidents, digest bound candidate fixes, replay, promotion. */
+  readonly correction: CorrectionResource;
   /** RMP benchmarks (cloud only): catalogue, plans, launches, runs, policies. */
   readonly benchmarks: BenchmarksResource;
   /** Replay tool execution: Tool Gateway (real calls) and Tool Mock Engine. */
@@ -67,6 +70,7 @@ export class AgenomicClient {
     this.protect = new ProtectResource(this);
     this.benchmarks = new BenchmarksResource(this);
     this.tools = new ToolsResource(this);
+    this.correction = new CorrectionResource(this);
     this.vault = new VaultResource(this, options.vault);
     this.prompts = new PromptsResource(this);
     this.bindings = new BindingsResource(this);

@@ -268,8 +268,79 @@ export interface ProtectMetricsSummary {
   coverage_known_families: number;
 }
 
+export type ActionFamily = "data_egress" | "financial" | "identity_change" | "code_deploy" | "destructive_write" | "external_message";
+export type RiskTier = "elevated" | "high" | "critical";
+export type EffectClass = "read" | "reversible_write" | "irreversible_write" | "unknown";
+
+/**
+ * An intent posted to `simulate`. `families` and `family_tiers` can only add to
+ * what the gateway derives itself (arguments, tool name, effect), never remove
+ * a family; a classified call without a rule naming its family falls to the
+ * family floor (`family_default`: approval for elevated and high, denial for critical).
+ */
+export interface SimulateIntent {
+  families?: ActionFamily[];
+  family_tiers?: Partial<Record<ActionFamily, RiskTier>>;
+  delegation_chain?: string[];
+  effect?: EffectClass;
+  [key: string]: unknown;
+}
+
+export interface DelegationScope {
+  tools: string[];
+  families: ActionFamily[];
+  effect_ceiling: Exclude<EffectClass, "unknown">;
+}
+
+export interface DelegationParty {
+  kind: "user" | "api_key" | "agent";
+  id: string;
+}
+
+export interface DelegationLink {
+  schema_version: string;
+  id: string;
+  org_id: string;
+  parent_id?: string;
+  parent_ref?: string;
+  issued_by: DelegationParty;
+  delegator: DelegationParty;
+  delegate: DelegationParty;
+  scope: DelegationScope;
+  budget: { max_actions: number };
+  issued_at: string;
+  expires_at: string;
+  issuer: Record<string, unknown>;
+}
+
+/** A link signed with the organization key; `document.id` is what a run declares as `delegation_id`. */
+export interface SignedDelegation {
+  document: DelegationLink;
+  signature: Record<string, unknown>;
+}
+
+export interface IssueDelegationInput {
+  delegateAgentId: string;
+  scope: DelegationScope;
+  maxActions: number;
+  expiresAt: string;
+  parentId?: string;
+}
+
+/** The `protect` block of a tool execution run config; `delegation_id` opts the run in to attenuation. */
+export interface ProtectRunConfig {
+  agent_id: string;
+  environment: string;
+  mode?: ProtectEffectiveMode;
+  application_genome_digest?: string;
+  task_mandate_ref?: string;
+  policy_refs?: string[];
+  policy_refs_mode?: ProtectEffectiveMode;
+  delegation_id?: string;
+}
+
 export interface SimulateRequest {
-  intents: Array<Record<string, unknown>>;
+  intents: SimulateIntent[];
   policies?: Array<Record<string, unknown>>;
   policyRefs?: string[];
   decisionsFromRun?: string;
@@ -309,14 +380,14 @@ export interface KillSwitchInput {
   reason: string;
 }
 
-function query(params: Record<string, string | number | undefined>): string {
+export function query(params: Record<string, string | number | undefined>): string {
   const pairs = Object.entries(params).filter((entry): entry is [string, string | number] => entry[1] !== undefined);
   if (pairs.length === 0) return "";
   return "?" + pairs.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`).join("&");
 }
 
 /** List responses are enveloped under a documented key; anything else is a wire mismatch. */
-function list<T>(res: Record<string, unknown>, key: string): T[] {
+export function list<T>(res: Record<string, unknown>, key: string): T[] {
   const value = res[key];
   if (!Array.isArray(value)) {
     throw new ToolExecutionError("invalid_response", `list response carries no "${key}" array`, 0);
@@ -325,14 +396,14 @@ function list<T>(res: Record<string, unknown>, key: string): T[] {
 }
 
 /** Single-record responses are bare records; `id` proves the body is the record. */
-function record<T>(res: Record<string, unknown>, field: string, what: string): T {
+export function record<T>(res: Record<string, unknown>, field: string, what: string): T {
   if (typeof res[field] !== "string") {
     throw new ToolExecutionError("invalid_response", `${what} response is not a bare record`, 0);
   }
   return res as T;
 }
 
-function segment(value: string): string {
+export function segment(value: string): string {
   return encodeURIComponent(value);
 }
 
@@ -371,6 +442,7 @@ export class ProtectResource extends RmpProtectResource {
   readonly bindings: ProtectBindingsResource;
   readonly restrictions: ProtectRestrictionsResource;
   readonly exemptions: ProtectExemptionsResource;
+  readonly delegations: ProtectDelegationsResource;
 
   constructor(client: AgenomicClient) {
     super(client);
@@ -380,6 +452,7 @@ export class ProtectResource extends RmpProtectResource {
     this.bindings = new ProtectBindingsResource(client);
     this.restrictions = new ProtectRestrictionsResource(client);
     this.exemptions = new ProtectExemptionsResource(client);
+    this.delegations = new ProtectDelegationsResource(client);
   }
 
   async getSettings(): Promise<ProtectSettings> {
@@ -543,7 +616,7 @@ export class ProtectPoliciesResource {
     return policyRecord(res);
   }
 
-  async simulate(policyId: string, version: string, intents: Array<Record<string, unknown>>): Promise<SimulateResponse> {
+  async simulate(policyId: string, version: string, intents: SimulateIntent[]): Promise<SimulateResponse> {
     const res = await requestJson(this.client, "POST", `/v1/policies/${ProtectPoliciesResource.ref(policyId, version)}/simulate`, { intents });
     return simulation(res);
   }
@@ -635,5 +708,38 @@ export class ProtectExemptionsResource {
   async lift(exemptionId: string): Promise<ProtectExemption> {
     const res = await requestJson(this.client, "POST", `/v1/protect/exemptions/${segment(exemptionId)}/lift`, {});
     return record<ProtectExemption>(res, "id", "exemption");
+  }
+}
+
+function signedDelegation(res: Record<string, unknown>): SignedDelegation {
+  const document = res.document as { id?: unknown } | undefined;
+  if (document === null || typeof document !== "object" || typeof document.id !== "string") {
+    throw new ToolExecutionError("invalid_response", "delegation response carries no signed document", 0);
+  }
+  return res as unknown as SignedDelegation;
+}
+
+/**
+ * Signed delegation links (user or API key, then agent, then sub-agent). The
+ * gateway verifies the chain and attenuates only runs that declare
+ * `protect.delegation_id`; a run that does not declare one is not attenuated.
+ */
+export class ProtectDelegationsResource {
+  constructor(private readonly client: AgenomicClient) {}
+
+  /** The issuer comes from the credential; a link may not widen its parent. */
+  async issue(input: IssueDelegationInput): Promise<SignedDelegation> {
+    const res = await requestJson(this.client, "POST", "/v1/protect/delegations", {
+      ...(input.parentId ? { parent_id: input.parentId } : {}),
+      delegate_agent_id: input.delegateAgentId,
+      scope: input.scope,
+      budget: { max_actions: input.maxActions },
+      expires_at: input.expiresAt,
+    });
+    return signedDelegation(res);
+  }
+
+  async get(delegationId: string): Promise<SignedDelegation> {
+    return signedDelegation(await requestJson(this.client, "GET", `/v1/protect/delegations/${segment(delegationId)}`));
   }
 }

@@ -7,6 +7,13 @@
 import { randomUUID } from "node:crypto";
 
 import type { AgenomicClient } from "./client";
+import {
+  guardModelCall,
+  type GuardModelCallOptions,
+  type ModelCallDecision,
+  type ModelCallReportInput,
+  type ModelCallRequest,
+} from "./model-calls";
 import type { VaultExecuteInput, VaultExecuteResult, VaultExecutionStatus } from "./vault/types";
 
 export const TOOL_EXECUTION_SCHEMA_VERSION = "agenomic.tool_execution/v1";
@@ -88,7 +95,9 @@ export interface InvocationStatus {
   phase_at?: string;
 }
 
-export type ConflictReason = "in_flight" | "ambiguous_outcome" | "already_recorded";
+export type InvocationResolution = "succeeded" | "failed" | "not_executed";
+
+export type ConflictReason = "in_flight" | "ambiguous_outcome" | "already_recorded" | "attempt_in_flight";
 
 /** Admission stamp on an invocation (mirror of `InvocationDecision`). */
 export interface ProtectDecision {
@@ -225,32 +234,41 @@ export class ToolCallError extends Error {
 }
 
 /**
- * An identity already recorded was submitted again (HTTP 409). `reason` is
- * `in_flight` while the attempt is being processed, `ambiguous_outcome` when it
- * may have run and needs reconciliation, `already_recorded` otherwise. Nothing
- * was executed again; the stored state is on `invocation`.
+ * HTTP 409 on a call that cannot be started or answered again. Two forms:
+ * the identity itself is already recorded (`reason` is `in_flight`,
+ * `ambiguous_outcome` or `already_recorded`, stored state on `invocation`,
+ * `code` is `conflict`), or another attempt of the same logical call is
+ * unresolved (`reason` is `attempt_in_flight` or `ambiguous_outcome`, no
+ * `invocation`, `code` equals `reason`). Nothing was executed again.
  */
 export class ToolCallConflict extends ToolExecutionError {
   constructor(
     readonly reason: ConflictReason,
     message: string,
-    readonly invocation: InvocationStatus,
+    readonly invocation?: InvocationStatus,
     readonly requestId?: string,
+    code = "conflict",
   ) {
-    super("conflict", message, 409);
+    super(code, message, 409);
     this.name = "ToolCallConflict";
   }
 
   get inFlight(): boolean {
-    return this.reason === "in_flight";
+    return this.reason === "in_flight" || this.reason === "attempt_in_flight";
   }
 
   get ambiguous(): boolean {
     return this.reason === "ambiguous_outcome";
   }
+
+  /** True when the conflict comes from another attempt of the same logical call, not from this identity. */
+  get otherAttempt(): boolean {
+    return this.invocation === undefined;
+  }
 }
 
 const CONFLICT_REASONS: ReadonlySet<string> = new Set(["in_flight", "ambiguous_outcome", "already_recorded"]);
+const ATTEMPT_CONFLICT_CODES: ReadonlySet<string> = new Set(["attempt_in_flight", "ambiguous_outcome"]);
 
 /** Admission refused the call (403 `policy_denied`, transform proposal, rejected or expired approval); nothing ran. */
 export class ToolCallDenied extends ToolExecutionError {
@@ -386,8 +404,15 @@ export function acceptJson(method: JsonMethod, path: string, exchange: JsonExcha
   if (exchange.status < 200 || exchange.status >= 300) {
     const error = (exchange.body?.error ?? {}) as { code?: string; message?: string; reason?: string; request_id?: string };
     const invocation = exchange.body?.agenomic as InvocationStatus | undefined;
-    if (exchange.status === 409 && error.reason && CONFLICT_REASONS.has(error.reason) && invocation && typeof invocation === "object") {
-      throw new ToolCallConflict(error.reason as ConflictReason, error.message ?? `${method} ${path} returned 409`, invocation, error.request_id);
+    if (exchange.status === 409) {
+      const message = error.message ?? `${method} ${path} returned 409`;
+      if (error.reason && CONFLICT_REASONS.has(error.reason) && invocation && typeof invocation === "object") {
+        throw new ToolCallConflict(error.reason as ConflictReason, message, invocation, error.request_id);
+      }
+      if (error.reason === undefined && invocation === undefined && error.code && ATTEMPT_CONFLICT_CODES.has(error.code)) {
+        const prefix = `${error.code}: `;
+        throw new ToolCallConflict(error.code as ConflictReason, message.startsWith(prefix) ? message.slice(prefix.length) : message, undefined, error.request_id, error.code);
+      }
     }
     throw new ToolExecutionError(
       error.code ?? "http_error",
@@ -426,6 +451,34 @@ function readDecision(body: Record<string, unknown>): Omit<LocalAuthorization, "
     ...(permit !== null && typeof permit === "object" ? { permit: permit as SignedPermit } : {}),
     ...(protect !== null && typeof protect === "object" ? { protect: protect as ProtectDecision } : {}),
   };
+}
+
+function invocationStatus(res: Record<string, unknown>): InvocationStatus {
+  if (typeof res.record_id !== "string" || typeof res.phase !== "string") {
+    throw new ToolExecutionError("invalid_response", "invocation response carries no record_id and phase", 0);
+  }
+  return res as unknown as InvocationStatus;
+}
+
+function readModelDecision(body: Record<string, unknown>): ModelCallDecision {
+  const invalid = (what: string) => new ToolExecutionError("invalid_response", `model-calls/authorize ${what}`, 0);
+  if (typeof body.record_id !== "string" || typeof body.tool !== "string") throw invalid("carries no record_id and tool");
+  const common = {
+    tool: body.tool,
+    recordId: body.record_id,
+    ...(typeof body.phase === "string" ? { phase: body.phase as InvocationPhase } : {}),
+    ...(body.protect !== null && typeof body.protect === "object" ? { protect: body.protect as ProtectDecision } : {}),
+  };
+  if (body.decision === "allow") {
+    if (body.permit === null || typeof body.permit !== "object") throw invalid("allowed the call without a permit; refusing to call the provider");
+    return { decision: "allow", ...common, permit: body.permit as SignedPermit };
+  }
+  if (body.decision === "pending") {
+    if (typeof body.approval_id !== "string") throw invalid("answered pending without an approval_id");
+    return { decision: "pending", ...common, approvalId: body.approval_id };
+  }
+  if (body.decision === "denied") return { decision: "denied", ...common };
+  throw invalid(`answered an unknown decision ${String(body.decision)}`);
 }
 
 function runRecord(res: Record<string, unknown>): Record<string, unknown> {
@@ -688,6 +741,77 @@ export class ToolsResource {
       ...(options.permit ? { permit: options.permit } : {}),
     });
     return String(res.record_id ?? "");
+  }
+
+  /**
+   * Ask the gateway whether a model call may be made. Cooperative: the gateway
+   * decides on what the runtime declares and neither makes nor observes the
+   * call. Protect runs only. A re-POST of a recorded identity raises
+   * `ToolCallConflict`, except a denied one, which returns the same denial.
+   */
+  async authorizeModelCall(runId: string, request: ModelCallRequest): Promise<ModelCallDecision> {
+    const path = `/v1/tool-execution/runs/${runId}/model-calls/authorize`;
+    const exchange = await fetchJson(this.client, "POST", path, {
+      repetition: request.repetition ?? 1,
+      logical_call_id: request.logicalCallId,
+      attempt: request.attempt ?? 1,
+      provider: request.provider,
+      model: request.model,
+      max_output_tokens: request.maxOutputTokens,
+      estimated_input_tokens: request.estimatedInputTokens,
+      ...(request.endpointHost !== undefined ? { endpoint_host: request.endpointHost } : {}),
+      ...(request.estimatedCost ? { estimated_cost: { amount_minor: request.estimatedCost.amountMinor, currency: request.estimatedCost.currency } } : {}),
+      ...(request.dataClassification ? { data_classification: request.dataClassification } : {}),
+      ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
+      ...(request.toolChoiceName !== undefined ? { tool_choice_name: request.toolChoiceName } : {}),
+      ...(request.tools ? { tools: request.tools } : {}),
+      ...(request.stream !== undefined ? { stream: request.stream } : {}),
+      ...(request.parentCallId ? { parent_call_id: request.parentCallId } : {}),
+      ...(request.deadlineMs !== undefined ? { deadline_ms: request.deadlineMs } : {}),
+    });
+    const refused = exchange.status === 403 && exchange.body !== undefined && exchange.body.decision === "denied";
+    const body = refused ? (exchange.body as Record<string, unknown>) : acceptJson("POST", path, exchange);
+    return readModelDecision(body);
+  }
+
+  /** Settle a model call accepted by `authorizeModelCall`, presenting its single use permit. */
+  async reportModelCall(runId: string, input: ModelCallReportInput): Promise<string> {
+    const res = await this.request("POST", `/v1/tool-execution/runs/${runId}/model-calls/report`, {
+      repetition: input.repetition ?? 1,
+      logical_call_id: input.logicalCallId,
+      attempt: input.attempt ?? 1,
+      provider: input.provider,
+      model: input.model,
+      is_error: input.isError ?? false,
+      duration_ms: input.durationMs ?? 0,
+      permit: input.permit,
+      ...(input.usage ? { usage: { input_tokens: input.usage.inputTokens, output_tokens: input.usage.outputTokens } } : {}),
+    });
+    return String(res.record_id ?? "");
+  }
+
+  /** Authorize, run `call` on allow, report with the permit; see `guardModelCall`. */
+  guardModelCall<T>(runId: string, request: ModelCallRequest, call: () => Promise<T>, options?: GuardModelCallOptions<T>): Promise<T> {
+    return guardModelCall(this, runId, request, call, options);
+  }
+
+  /** Durable state of one invocation; any phase is returned as data. */
+  async getInvocation(runId: string, recordId: string): Promise<InvocationStatus> {
+    const res = await this.request("GET", `/v1/tool-execution/runs/${runId}/invocations/${recordId}`);
+    return invocationStatus(res);
+  }
+
+  /**
+   * Close a call in `outcome_unknown` from operator evidence. The server
+   * restricts this to an admin role and records the evidence; it decides
+   * whether a possibly executed action counts as done.
+   */
+  async resolveInvocation(runId: string, recordId: string, input: { resolution: InvocationResolution; evidence: string }): Promise<InvocationStatus> {
+    const res = await this.request("POST", `/v1/tool-execution/runs/${runId}/invocations/${recordId}/resolve`, {
+      resolution: input.resolution,
+      evidence: input.evidence,
+    });
+    return invocationStatus(res);
   }
 
   router(runId: string, options: ToolRouterOptions = {}): ToolRouter {

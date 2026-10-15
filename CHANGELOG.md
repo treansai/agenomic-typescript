@@ -18,6 +18,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `ToolCallConflict`: a 409 on an unresolved attempt now raises a typed error
   with `reason` (`in_flight`, `ambiguous_outcome`, `already_recorded`) and the
   stored `invocation` status. It extends `ToolExecutionError` (code `conflict`).
+- Model call admission (cooperative, protect runs only): `tools.authorizeModelCall`
+  and `reportModelCall` with a typed `allow` / `pending` / `denied` decision, and
+  `tools.guardModelCall` / `guardModelCall` which calls the provider only on
+  allow and reports usage with the permit. The runtime declares tokens, cost,
+  classification and host; the gateway neither sees the prompt nor observes the
+  call, and the request type has no prompt field. `ModelCallDenied` and
+  `ModelCallPending` are raised by the wrapper.
+- Invocation reads and reconciliation: `tools.getInvocation` and
+  `tools.resolveInvocation` (`succeeded`, `failed`, `not_executed`, with evidence).
+- Action families and delegation: `ActionFamily`, `RiskTier`, `SimulateIntent`
+  (families, family tiers, delegation chain), `ProtectRunConfig.delegation_id`,
+  and `protect.delegations.issue` / `get`. A run is attenuated only when it
+  declares `delegation_id`.
+- Correction loop client `client.correction` (`incidents`, `candidates`,
+  `getSettings`, `updateSettings`, `sweep`) over `/v1/correction`.
+
+### Changed
+
+- `ToolCallConflict` now covers the second 409 form: another attempt of the same
+  logical call is unresolved (`error.code` `attempt_in_flight` or
+  `ambiguous_outcome`, no reason, no `agenomic` block). `invocation` is optional,
+  `reason` may be `attempt_in_flight`, `code` equals the reason for that form,
+  and `otherAttempt` tells the two forms apart. This raised a plain
+  `ToolExecutionError` before.
+- `SimulateRequest.intents` is typed as `SimulateIntent[]` (still open to other keys).
 
 ## [0.1.4] - 2026-10-06
 

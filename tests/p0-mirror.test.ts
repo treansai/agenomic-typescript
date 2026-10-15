@@ -80,7 +80,7 @@ describe("409 on an unresolved attempt", () => {
     stubFetch(() => conflict("ambiguous_outcome", "outcome_unknown"));
     const error = await cloud().tools.authorizeLocal(RUN, "crm.update_customer", {}, { logicalCallId: "call_1" }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ToolCallConflict);
-    expect((error as ToolCallConflict).invocation.requires_reconciliation).toBe(true);
+    expect((error as ToolCallConflict).invocation?.requires_reconciliation).toBe(true);
   });
 
   it("a plain 409 stays a ToolExecutionError", async () => {
