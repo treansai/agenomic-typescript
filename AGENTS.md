@@ -121,3 +121,12 @@ The gateway DTOs are the source of truth; SDK public signatures stay stable.
 - TS `TrackingEventType` now equals the Python vocabulary; the gateway accepts any `type` string.
 - TS `sendTraceToHttp` keeps posting to the given endpoint URL; the agent lookup derives the base by stripping `/v1/traces`.
 
+
+## Protect P1 and P2 mirror (model calls, families, delegation, correction)
+
+- Source of the shapes: the unmerged cloud branches `feat/p1-model-call-admission`, `feat/p1-action-families-delegation` and `feat/p2-correction-loop`, read from code. No run against a live gateway.
+- `ToolCallConflict` tells the two 409 forms apart: `error.reason` plus an `agenomic` block (the identity itself is recorded, `code` stays `conflict`), or `error.code` in `attempt_in_flight` / `ambiguous_outcome` with neither (another attempt of the same logical call is unresolved, `code` equals `reason`, `invocation` is undefined, `otherAttempt` is true). The gateway sets that code through `code_override` from `ToolExecutionError::code()`.
+- Model call admission is cooperative: the runtime declares tokens, cost, classification and host, the gateway neither sees the prompt nor observes the call. `ModelCallRequest` has no prompt field and the body is built field by field. `authorizeModelCall` treats an `allow` without a permit as `invalid_response` (the server types it optional, but `report` refuses a missing permit) so the provider is not called on a half answer.
+- `ModelCallDenied` and `ModelCallPending` extend `Error`, not `ToolExecutionError` (unlike `ToolCallDenied`): `model-calls.ts` is imported by `tools.ts`, and a value import back would make a cycle that breaks `extends` in the bundle. `ToolRouter` does not route model calls; `guardModelCall` is standalone.
+- `query`, `list`, `record` and `segment` are exported from `protect.ts` so `correction.ts` shares them; they are not re-exported from `index.ts`.
+- Delegation attenuates only runs that declare `protect.delegation_id`; `ProtectRunConfig` is a type, `createRun` still takes an untyped config.

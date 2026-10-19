@@ -7,6 +7,15 @@
 import { randomUUID } from "node:crypto";
 
 import type { AgenomicClient } from "./client";
+import {
+  guardModelCall,
+  ModelCallDenied,
+  ModelCallPending,
+  type GuardModelCallOptions,
+  type ModelCallDecision,
+  type ModelCallReportInput,
+  type ModelCallRequest,
+} from "./model-calls";
 import type { VaultExecuteInput, VaultExecuteResult, VaultExecutionStatus } from "./vault/types";
 
 export const TOOL_EXECUTION_SCHEMA_VERSION = "agenomic.tool_execution/v1";
@@ -26,6 +35,71 @@ export type ToolInvocationStatus = "success" | "error" | "aborted" | "timeout" |
 export type ToolExternalState = "none" | "confirmed" | "indeterminate";
 export type ProtectOutcome = "allow" | "deny" | "require_approval" | "pause" | "transform_proposal";
 export type ProtectEffectiveMode = "enforce" | "shadow";
+export type InvocationPhase =
+  | "received"
+  | "admission_pending"
+  | "approval_pending"
+  | "denied"
+  | "authorized"
+  | "dispatching"
+  | "succeeded"
+  | "failed"
+  | "outcome_unknown";
+export type EntitlementState = "entitled" | "not_entitled" | "unknown";
+export type RequirementSource = "mandatory_org" | "binding" | "run_binding";
+export type ProtectionDenial =
+  | "protect_required:mandatory_org"
+  | "protect_required:binding"
+  | "protect_required:run_binding"
+  | "kill_switch"
+  | "restriction_active"
+  | "capability_denied"
+  | "protect_state_unavailable";
+export type EffectiveState = "not_applicable" | "enforced" | "shadow" | "exempt" | "none" | "blocked" | "unknown";
+
+export interface ExemptionRef {
+  id: string;
+  scope_kind: string;
+  scope_ref: string;
+  expires_at: string;
+}
+
+/** What protects a run right now; only `state === "enforced"` means protected. */
+export interface EffectiveProtection {
+  entitlement: EntitlementState;
+  org_mandatory: boolean;
+  requirement?: RequirementSource;
+  run_mode: string;
+  protect_block: boolean;
+  protect_mode?: ProtectEffectiveMode;
+  exemption?: ExemptionRef;
+  denial?: ProtectionDenial;
+  state: EffectiveState;
+}
+
+/** Durable state of one invocation (mirror of `InvocationStatusResponse`). */
+export interface InvocationStatus {
+  record_id: string;
+  run_id: string;
+  phase: InvocationPhase;
+  status: ToolInvocationStatus;
+  external_state: ToolExternalState;
+  tool: string;
+  logical_call_id: string;
+  repetition: number;
+  attempt: number;
+  error_code?: string;
+  requires_reconciliation: boolean;
+  protect?: ProtectDecision;
+  approval_id?: string;
+  reconciliation?: Record<string, unknown>;
+  started_at: string;
+  phase_at?: string;
+}
+
+export type InvocationResolution = "succeeded" | "failed" | "not_executed";
+
+export type ConflictReason = "in_flight" | "ambiguous_outcome" | "already_recorded" | "attempt_in_flight";
 
 /** Admission stamp on an invocation (mirror of `InvocationDecision`). */
 export interface ProtectDecision {
@@ -81,6 +155,7 @@ export interface ToolCallEnvelope {
   decision?: string;
   transformation?: TransformationProposal;
   safe_explanation?: string;
+  phase?: InvocationPhase;
 }
 
 /** Native tool result plus the Agenomic technical envelope; `result` is null when denied or pending. */
@@ -117,6 +192,7 @@ export interface LocalAuthorization {
   approvalId?: string;
   permit?: SignedPermit;
   protect?: ProtectDecision;
+  phase?: InvocationPhase;
 }
 
 /** The call identity handed to `beforeAction` before any request leaves the process. */
@@ -158,6 +234,43 @@ export class ToolCallError extends Error {
     this.code = String(code);
   }
 }
+
+/**
+ * HTTP 409 on a call that cannot be started or answered again. Two forms:
+ * the identity itself is already recorded (`reason` is `in_flight`,
+ * `ambiguous_outcome` or `already_recorded`, stored state on `invocation`,
+ * `code` is `conflict`), or another attempt of the same logical call is
+ * unresolved (`reason` is `attempt_in_flight` or `ambiguous_outcome`, no
+ * `invocation`, `code` equals `reason`). Nothing was executed again.
+ */
+export class ToolCallConflict extends ToolExecutionError {
+  constructor(
+    readonly reason: ConflictReason,
+    message: string,
+    readonly invocation?: InvocationStatus,
+    readonly requestId?: string,
+    code = "conflict",
+  ) {
+    super(code, message, 409);
+    this.name = "ToolCallConflict";
+  }
+
+  get inFlight(): boolean {
+    return this.reason === "in_flight" || this.reason === "attempt_in_flight";
+  }
+
+  get ambiguous(): boolean {
+    return this.reason === "ambiguous_outcome";
+  }
+
+  /** True when the conflict comes from another attempt of the same logical call, not from this identity. */
+  get otherAttempt(): boolean {
+    return this.invocation === undefined;
+  }
+}
+
+const CONFLICT_REASONS: ReadonlySet<string> = new Set(["in_flight", "ambiguous_outcome", "already_recorded"]);
+const ATTEMPT_CONFLICT_CODES: ReadonlySet<string> = new Set(["attempt_in_flight", "ambiguous_outcome"]);
 
 /** Admission refused the call (403 `policy_denied`, transform proposal, rejected or expired approval); nothing ran. */
 export class ToolCallDenied extends ToolExecutionError {
@@ -291,7 +404,18 @@ async function exchange(
 /** Turns a non-2xx `{ error: { code, message } }` or a non-JSON body into a typed error. */
 export function acceptJson(method: JsonMethod, path: string, exchange: JsonExchange): Record<string, unknown> {
   if (exchange.status < 200 || exchange.status >= 300) {
-    const error = (exchange.body?.error ?? {}) as { code?: string; message?: string };
+    const error = (exchange.body?.error ?? {}) as { code?: string; message?: string; reason?: string; request_id?: string };
+    const invocation = exchange.body?.agenomic as InvocationStatus | undefined;
+    if (exchange.status === 409) {
+      const message = error.message ?? `${method} ${path} returned 409`;
+      if (error.reason && CONFLICT_REASONS.has(error.reason) && invocation && typeof invocation === "object") {
+        throw new ToolCallConflict(error.reason as ConflictReason, message, invocation, error.request_id);
+      }
+      if (error.reason === undefined && invocation === undefined && error.code && ATTEMPT_CONFLICT_CODES.has(error.code)) {
+        const prefix = `${error.code}: `;
+        throw new ToolCallConflict(error.code as ConflictReason, message.startsWith(prefix) ? message.slice(prefix.length) : message, undefined, error.request_id, error.code);
+      }
+    }
     throw new ToolExecutionError(
       error.code ?? "http_error",
       error.message ?? `${method} ${path} returned ${exchange.status}`,
@@ -323,11 +447,45 @@ function readDecision(body: Record<string, unknown>): Omit<LocalAuthorization, "
   const permit = body.permit;
   const protect = body.protect;
   return {
+    ...(typeof body.phase === "string" ? { phase: body.phase as InvocationPhase } : {}),
     ...(body.record_id !== undefined ? { recordId: String(body.record_id) } : {}),
     ...(body.approval_id !== undefined ? { approvalId: String(body.approval_id) } : {}),
     ...(permit !== null && typeof permit === "object" ? { permit: permit as SignedPermit } : {}),
     ...(protect !== null && typeof protect === "object" ? { protect: protect as ProtectDecision } : {}),
   };
+}
+
+function invocationStatus(res: Record<string, unknown>): InvocationStatus {
+  if (typeof res.record_id !== "string" || typeof res.phase !== "string") {
+    throw new ToolExecutionError("invalid_response", "invocation response carries no record_id and phase", 0);
+  }
+  return res as unknown as InvocationStatus;
+}
+
+function readModelDecision(body: Record<string, unknown>): ModelCallDecision {
+  const invalid = (what: string) => new ToolExecutionError("invalid_response", `model-calls/authorize ${what}`, 0);
+  if (typeof body.record_id !== "string" || typeof body.tool !== "string") throw invalid("carries no record_id and tool");
+  const common = {
+    tool: body.tool,
+    recordId: body.record_id,
+    ...(typeof body.phase === "string" ? { phase: body.phase as InvocationPhase } : {}),
+    ...(body.protect !== null && typeof body.protect === "object" ? { protect: body.protect as ProtectDecision } : {}),
+  };
+  if (body.decision === "allow") {
+    if (body.permit === null || typeof body.permit !== "object") throw invalid("allowed the call without a permit; refusing to call the provider");
+    return { decision: "allow", ...common, permit: body.permit as SignedPermit };
+  }
+  if (body.decision === "pending") {
+    if (typeof body.approval_id !== "string") throw invalid("answered pending without an approval_id");
+    return { decision: "pending", ...common, approvalId: body.approval_id };
+  }
+  if (body.decision === "denied") return { decision: "denied", ...common };
+  throw invalid(`answered an unknown decision ${String(body.decision)}`);
+}
+
+function runRecord(res: Record<string, unknown>): Record<string, unknown> {
+  const run = (res.run ?? {}) as Record<string, unknown>;
+  return res.protection !== null && typeof res.protection === "object" ? { ...run, protection: res.protection } : run;
 }
 
 function configBody(input: ToolExecutionConfigInput): Record<string, unknown> {
@@ -452,27 +610,27 @@ export class ToolsResource {
       ...(options.replayJobId ? { replay_job_id: options.replayJobId } : {}),
       ...(options.rmpSessionId ? { rmp_session_id: options.rmpSessionId } : {}),
     });
-    return (res.run ?? {}) as Record<string, unknown>;
+    return runRecord(res);
   }
 
   async getRun(runId: string): Promise<Record<string, unknown>> {
     const res = await this.request("GET", `/v1/tool-execution/runs/${runId}`);
-    return (res.run ?? {}) as Record<string, unknown>;
+    return runRecord(res);
   }
 
   async approveRun(runId: string, planHash: string): Promise<Record<string, unknown>> {
     const res = await this.request("POST", `/v1/tool-execution/runs/${runId}/approve`, { plan_hash: planHash });
-    return (res.run ?? {}) as Record<string, unknown>;
+    return runRecord(res);
   }
 
   async startRun(runId: string): Promise<Record<string, unknown>> {
     const res = await this.request("POST", `/v1/tool-execution/runs/${runId}/start`, {});
-    return (res.run ?? {}) as Record<string, unknown>;
+    return runRecord(res);
   }
 
   async cancelRun(runId: string): Promise<Record<string, unknown>> {
     const res = await this.request("POST", `/v1/tool-execution/runs/${runId}/cancel`, {});
-    return (res.run ?? {}) as Record<string, unknown>;
+    return runRecord(res);
   }
 
   async completeRun(runId: string, options: { failed?: boolean; errorMessage?: string } = {}) {
@@ -480,7 +638,7 @@ export class ToolsResource {
       failed: options.failed ?? false,
       ...(options.errorMessage ? { error_message: options.errorMessage } : {}),
     });
-    return (res.run ?? {}) as Record<string, unknown>;
+    return runRecord(res);
   }
 
   async report(runId: string) {
@@ -587,6 +745,77 @@ export class ToolsResource {
     return String(res.record_id ?? "");
   }
 
+  /**
+   * Ask the gateway whether a model call may be made. Cooperative: the gateway
+   * decides on what the runtime declares and neither makes nor observes the
+   * call. Protect runs only. A re-POST of a recorded identity raises
+   * `ToolCallConflict`, except a denied one, which returns the same denial.
+   */
+  async authorizeModelCall(runId: string, request: ModelCallRequest): Promise<ModelCallDecision> {
+    const path = `/v1/tool-execution/runs/${runId}/model-calls/authorize`;
+    const exchange = await fetchJson(this.client, "POST", path, {
+      repetition: request.repetition ?? 1,
+      logical_call_id: request.logicalCallId,
+      attempt: request.attempt ?? 1,
+      provider: request.provider,
+      model: request.model,
+      max_output_tokens: request.maxOutputTokens,
+      estimated_input_tokens: request.estimatedInputTokens,
+      ...(request.endpointHost !== undefined ? { endpoint_host: request.endpointHost } : {}),
+      ...(request.estimatedCost ? { estimated_cost: { amount_minor: request.estimatedCost.amountMinor, currency: request.estimatedCost.currency } } : {}),
+      ...(request.dataClassification ? { data_classification: request.dataClassification } : {}),
+      ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
+      ...(request.toolChoiceName !== undefined ? { tool_choice_name: request.toolChoiceName } : {}),
+      ...(request.tools ? { tools: request.tools } : {}),
+      ...(request.stream !== undefined ? { stream: request.stream } : {}),
+      ...(request.parentCallId ? { parent_call_id: request.parentCallId } : {}),
+      ...(request.deadlineMs !== undefined ? { deadline_ms: request.deadlineMs } : {}),
+    });
+    const refused = exchange.status === 403 && exchange.body !== undefined && exchange.body.decision === "denied";
+    const body = refused ? (exchange.body as Record<string, unknown>) : acceptJson("POST", path, exchange);
+    return readModelDecision(body);
+  }
+
+  /** Settle a model call accepted by `authorizeModelCall`, presenting its single use permit. */
+  async reportModelCall(runId: string, input: ModelCallReportInput): Promise<string> {
+    const res = await this.request("POST", `/v1/tool-execution/runs/${runId}/model-calls/report`, {
+      repetition: input.repetition ?? 1,
+      logical_call_id: input.logicalCallId,
+      attempt: input.attempt ?? 1,
+      provider: input.provider,
+      model: input.model,
+      is_error: input.isError ?? false,
+      duration_ms: input.durationMs ?? 0,
+      permit: input.permit,
+      ...(input.usage ? { usage: { input_tokens: input.usage.inputTokens, output_tokens: input.usage.outputTokens } } : {}),
+    });
+    return String(res.record_id ?? "");
+  }
+
+  /** Authorize, run `call` on allow, report with the permit; see `guardModelCall`. */
+  guardModelCall<T>(runId: string, request: ModelCallRequest, call: () => Promise<T>, options?: GuardModelCallOptions<T>): Promise<T> {
+    return guardModelCall(this, runId, request, call, options);
+  }
+
+  /** Durable state of one invocation; any phase is returned as data. */
+  async getInvocation(runId: string, recordId: string): Promise<InvocationStatus> {
+    const res = await this.request("GET", `/v1/tool-execution/runs/${runId}/invocations/${recordId}`);
+    return invocationStatus(res);
+  }
+
+  /**
+   * Close a call in `outcome_unknown` from operator evidence. The server
+   * restricts this to an admin role and records the evidence; it decides
+   * whether a possibly executed action counts as done.
+   */
+  async resolveInvocation(runId: string, recordId: string, input: { resolution: InvocationResolution; evidence: string }): Promise<InvocationStatus> {
+    const res = await this.request("POST", `/v1/tool-execution/runs/${runId}/invocations/${recordId}/resolve`, {
+      resolution: input.resolution,
+      evidence: input.evidence,
+    });
+    return invocationStatus(res);
+  }
+
   router(runId: string, options: ToolRouterOptions = {}): ToolRouter {
     return new ToolRouter(this, runId, options);
   }
@@ -620,6 +849,15 @@ export interface ToolRouterOptions {
 export interface ResumeOptions {
   pollIntervalMs?: number;
   timeoutMs?: number;
+}
+
+export interface RouterModelCallRequest extends Omit<ModelCallRequest, "logicalCallId"> {
+  logicalCallId?: string;
+}
+
+export interface RouterModelCallOptions<T> extends GuardModelCallOptions<T> {
+  /** Opt-in: on a pending model call, wait for the approval and run the guarded call once more. Bounded by `timeoutMs`. */
+  autoResume?: boolean | ResumeOptions;
 }
 
 interface RouterCallOptions {
@@ -670,6 +908,7 @@ export class ToolRouter {
   private sequence = 0;
   private readonly pending = new Map<string, PendingIdentity>();
   private readonly resuming = new Set<string>();
+  private readonly pendingModels = new Map<string, ModelCallRequest>();
 
   constructor(
     private readonly tools: ToolsResource,
@@ -778,31 +1017,32 @@ export class ToolRouter {
     }
   }
 
+  private async pollApproval(approvalId: string, opts: ResumeOptions): Promise<string> {
+    const pollIntervalMs = opts.pollIntervalMs ?? 2000;
+    const timeoutMs = opts.timeoutMs ?? 900_000;
+    const started = Date.now();
+    for (;;) {
+      const { status } = await this.tools.client.protect.approvals.get(approvalId);
+      if (status !== "pending") return status;
+      if (Date.now() - started >= timeoutMs) {
+        throw new ToolExecutionError("approval_timeout", `approval ${approvalId} still pending after ${timeoutMs}ms`, 0);
+      }
+      await sleep(pollIntervalMs);
+    }
+  }
+
   private async awaitAndReissue<T>(
     approvalId: string,
     approval: ToolApprovalPending | string,
     identity: PendingIdentity,
     opts: ResumeOptions,
   ): Promise<T> {
-    const pollIntervalMs = opts.pollIntervalMs ?? 2000;
-    const timeoutMs = opts.timeoutMs ?? 900_000;
-    const started = Date.now();
-    let consumed = false;
-    for (;;) {
-      const { status } = await this.tools.client.protect.approvals.get(approvalId);
-      if (status === "approved" || status === "consumed") {
-        consumed = status === "consumed";
-        break;
-      }
-      if (status !== "pending") {
-        this.pending.delete(approvalId);
-        const envelope = typeof approval === "string" ? admissionEnvelope("denied", "", { decision: "denied" }) : approval.envelope;
-        throw new ToolCallDenied(identity.tool, { ...envelope, agenomic: { ...envelope.agenomic, status: "denied" } }, status);
-      }
-      if (Date.now() - started >= timeoutMs) {
-        throw new ToolExecutionError("approval_timeout", `approval ${approvalId} still pending after ${timeoutMs}ms`, 0);
-      }
-      await sleep(pollIntervalMs);
+    const status = await this.pollApproval(approvalId, opts);
+    const consumed = status === "consumed";
+    if (status !== "approved" && !consumed) {
+      this.pending.delete(approvalId);
+      const envelope = typeof approval === "string" ? admissionEnvelope("denied", "", { decision: "denied" }) : approval.envelope;
+      throw new ToolCallDenied(identity.tool, { ...envelope, agenomic: { ...envelope.agenomic, status: "denied" } }, status);
     }
     this.pending.delete(approvalId);
     try {
@@ -816,6 +1056,81 @@ export class ToolRouter {
         );
       }
       throw error;
+    }
+  }
+
+  /**
+   * Route a model call through admission like a tool call: a stable
+   * `logicalCallId` is minted when absent, the router repetition is applied,
+   * and denied or pending outcomes are recorded in `calls`. A pending call
+   * throws `ModelCallPending` unless `autoResume` is set, in which case the
+   * approval is awaited (bounded by `timeoutMs`) and the call is re-run once.
+   */
+  async guardModelCall<T>(request: RouterModelCallRequest, call: () => Promise<T>, options: RouterModelCallOptions<T> = {}): Promise<T> {
+    const full: ModelCallRequest = {
+      ...request,
+      logicalCallId: request.logicalCallId ?? this.nextCallId(`model:${request.provider}/${request.model}`),
+      ...(request.repetition === undefined && this.options.repetition !== undefined ? { repetition: this.options.repetition } : {}),
+    };
+    const { autoResume, ...guardOptions } = options;
+    try {
+      return await this.runModelCall(full, call, guardOptions);
+    } catch (error) {
+      if (error instanceof ModelCallPending && autoResume) {
+        return this.resumeModelCall(error, call, guardOptions, autoResume === true ? {} : autoResume);
+      }
+      throw error;
+    }
+  }
+
+  private async runModelCall<T>(request: ModelCallRequest, call: () => Promise<T>, options: GuardModelCallOptions<T>): Promise<T> {
+    try {
+      return await this.tools.guardModelCall(this.runId, request, call, options);
+    } catch (error) {
+      if (error instanceof ModelCallDenied) {
+        this.calls.push(admissionEnvelope("denied", error.decision.recordId, error.decision));
+      } else if (error instanceof ModelCallPending) {
+        this.calls.push(admissionEnvelope("pending", error.decision.recordId, { decision: "pending", approvalId: error.approvalId, protect: error.decision.protect }));
+        if (error.approvalId) this.pendingModels.set(error.approvalId, request);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Wait for the approval behind a pending model call, then run the same
+   * guarded call again once with the same identity. A terminal status other
+   * than approved or consumed throws `ModelCallDenied` with that status as
+   * `code`; waiting past `timeoutMs` throws `ToolExecutionError("approval_timeout")`.
+   * A second pending answer is thrown, never looped on.
+   */
+  async resumeModelCall<T>(
+    approval: ModelCallPending | string,
+    call: () => Promise<T>,
+    options: GuardModelCallOptions<T> = {},
+    opts: ResumeOptions = {},
+  ): Promise<T> {
+    const approvalId = typeof approval === "string" ? approval : approval.approvalId;
+    const request = this.pendingModels.get(approvalId);
+    if (!request) {
+      throw new ToolExecutionError("unknown_approval", `no pending model call is registered for approval ${approvalId}`, 0);
+    }
+    if (this.resuming.has(approvalId)) {
+      throw new ToolExecutionError("resume_in_flight", `approval ${approvalId} is already being resumed by this router`, 0);
+    }
+    this.resuming.add(approvalId);
+    try {
+      const status = await this.pollApproval(approvalId, opts);
+      this.pendingModels.delete(approvalId);
+      if (status !== "approved" && status !== "consumed") {
+        const tool = typeof approval === "string" ? `model:${request.provider}/${request.model}` : approval.tool;
+        const protect = typeof approval === "string" ? undefined : approval.decision.protect;
+        const recordId = typeof approval === "string" ? "" : approval.decision.recordId;
+        throw new ModelCallDenied(tool, { decision: "denied", tool, recordId, ...(protect ? { protect } : {}) }, status);
+      }
+      return await this.runModelCall(request, call, options);
+    } finally {
+      this.resuming.delete(approvalId);
     }
   }
 
